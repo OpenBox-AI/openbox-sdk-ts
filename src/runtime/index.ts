@@ -1,7 +1,8 @@
 /**
  * OpenBoxRuntime composition root — wires config/client/gate/context/adapter; drives approvals (Phase 4).
  *
- * Placeholder — populated in a later phase. Exports nothing heavy yet so the
- * package root stays import-light (see test/root-import-safety.test.ts).
+ * Off the import-light root by design (transitively pulls in `node:crypto`
+ * via identity/client and `node:async_hooks` via context).
  */
-export {};
+export * from "./openbox-runtime.js";
+export { HookEvaluator, type HookEvaluatorDeps } from "./hook-evaluator.js";

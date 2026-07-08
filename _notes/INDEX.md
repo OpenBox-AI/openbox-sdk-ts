@@ -5,6 +5,7 @@ Entry point for `openbox-sdk-ts` project notes. One line per note.
 ## Architecture
 
 - [arch-base-sdk-scaffolding](arch-base-sdk-scaffolding.md) — Phase 1 scaffolding, tooling provenance (mirrors Mastra), and the npm-cache / Node-25 `moduleLoadList` sharp edges.
+- [arch-core-parity-gate](arch-core-parity-gate.md) — how `test/core-parity/` proves TS ≡ Core (Go `SpanData` unmarshal + `ed25519.Verify`); requires a Go toolchain (skips silently without one).
 
 ## Decisions
 

@@ -25,6 +25,11 @@ export * from "./contracts/events.js";
 export * from "./contracts/event-factories.js";
 export * from "./contracts/diagnostics.js";
 
+// ActivityContext (pure — no crypto/network/node:async_hooks; the
+// AsyncLocalStorage-backed ContextStore itself lives at "./context" and is
+// NOT re-exported here, to keep the root import-light).
+export * from "./contracts/context.js";
+
 // Error hierarchy (pure).
 export * from "./errors/index.js";
 

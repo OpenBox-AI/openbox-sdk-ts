@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Runtime Adapter Conformance"
-status: pending
+status: complete
 priority: P1
 effort: "4-5d"
 dependencies: [3]
@@ -102,20 +102,28 @@ Reference (read-only): `openbox-sdk-python/openbox_core/{context,runtime,approva
 
 ## Success Criteria
 
-- [ ] Runtime evaluates lifecycle + hook with zero framework deps.
-- [ ] Adapter is the only layer creating native effects; `CoreAdapter`
+- [x] Runtime evaluates lifecycle + hook with zero framework deps.
+- [x] Adapter is the only layer creating native effects; `CoreAdapter`
       completed-hook is a no-op; `CoreAdapter`-no-poller rejects `REQUIRE_APPROVAL`.
-- [ ] `activityScope` (als.run) resets on success + throw; two overlapping scopes
+- [x] `activityScope` (als.run) resets on success + throw; two overlapping scopes
       never cross-observe context.
-- [ ] Trace map keyed by 32-hex/BigInt (no `parseInt`); bounded — `traceMapSize()`
+- [x] Trace map keyed by 32-hex/BigInt (no `parseInt`); bounded — `traceMapSize()`
       returns to baseline after N requests; no stale cross-tenant resolution.
-- [ ] Approval matrix (pending/rejected/approved/expired) behaves per strict
+- [x] Approval matrix (pending/rejected/approved/expired) behaves per strict
       parsing via FakeAdapter/poller; Core-unreachable ⇒ `ApprovalTimeoutError`.
-- [ ] `FakeCore` proves request body + all signed headers.
-- [ ] **Core-parity gate green** (Go harness or Core round-trip): TS≡Core, not just
-      TS≡Python — including a non-ASCII payload.
-- [ ] Conformance kit importable by an external test file (test-utility path).
-- [ ] **Conformance + Core-parity gates green → unblocks Phase 6.**
+- [x] `FakeCore` proves request body + all signed headers.
+- [x] **Core-parity gate green** (Go harness): TS≡Core, not just TS≡Python —
+      real Core `SpanData` unmarshal (`DisallowUnknownFields`) + Go `crypto/ed25519`
+      verify of a TS signature over a non-ASCII payload.
+- [x] Conformance kit importable by an external test file (test-utility path).
+- [x] **Conformance + Core-parity gates green → unblocks Phase 6.**
+
+**Review-hardened (Phase 4 code review):** `abortedActivities` is now a bounded
+FIFO set (persists for future-execution short-circuit, but cannot grow unbounded
+in a long-lived worker). Deferred to Phase 6 wiring: emphasize `HitlConfig.maxWaitMs`
+(default null ⇒ indefinite poll on a reachable-but-flapping Core), and consider
+routing lifecycle transport failures through the adapter (currently propagate raw
+but still fail closed).
 
 ## Risk Assessment
 

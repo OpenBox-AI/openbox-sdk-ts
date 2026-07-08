@@ -216,7 +216,7 @@ Verified against source; each phase's tests must enforce them.
 | 1 | [Repo Scaffolding And Source Audit](./phase-01-repo-scaffolding-and-source-audit.md) | ✅ Complete |
 | 2 | [Contracts Config Identity Client](./phase-02-contracts-config-identity-client.md) | ✅ Complete |
 | 3 | [Event Wire Span Gate](./phase-03-event-wire-span-gate.md) | ✅ Complete |
-| 4 | [Runtime Adapter Conformance](./phase-04-runtime-adapter-conformance.md) | Pending |
+| 4 | [Runtime Adapter Conformance](./phase-04-runtime-adapter-conformance.md) | ✅ Complete |
 | 5 | [Node Instrumentation Hook Runtime](./phase-05-node-instrumentation-hook-runtime.md) (Tier A1/A2/B) | Pending |
 | 6 | [Mastra Adapter Migration](./phase-06-mastra-adapter-migration.md) | Pending |
 | 7 | [Release Readiness](./phase-07-release-readiness.md) | Pending |
