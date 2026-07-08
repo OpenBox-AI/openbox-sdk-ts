@@ -8,4 +8,4 @@ Entry point for `openbox-sdk-ts` project notes. One line per note.
 
 ## Decisions
 
-_(none yet — `decision-openbox-ts-base-sdk-not-mastra-driven` is a candidate: base SDK is contract-driven from Core+Python, Mastra is first consumer only.)_
+- [decision-signing-parity-and-fail-closed-auth](decision-signing-parity-and-fail-closed-auth.md) — the two sticky Phase 2 decisions: ASCII-escape + PKCS8-DER signing byte-parity, and evaluate() failing CLOSED on auth 401/403 (intentional divergence from Python's fail-open).

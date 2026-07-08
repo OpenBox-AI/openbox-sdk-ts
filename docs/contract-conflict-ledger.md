@@ -77,6 +77,25 @@ on an audit counter-argument alone (surface new data instead).
   fixture. Phase 2 asserts a `Z` signing timestamp yields a **different** signature
   (format guard).
 
+## 6. TS↔Python byte-parity is total for strings, partial for numbers/keys
+
+Verified empirically (real `serializeBody` vs Python `json.dumps`, 39 payloads).
+**Byte-identical** for all string/Unicode cases (non-ASCII keys + values, emoji
+surrogate pairs, lone surrogates, U+2028/29, C1 controls, `<>&`, backslash). Two
+gaps are **JS↔Python representational differences, unfixable at the serializer**:
+
+- **Integer-like object keys** — JS auto-sorts integer-index keys ascending;
+  Python preserves insertion order (`{"2":_,"1":_}` → JS `{"1":,"2":}`).
+- **Whole-number floats** — a JS `number` has no int/float distinction, so
+  `1.0`→`1` (Python keeps `1.0`).
+
+**Not a Core-401 risk:** signing is self-consistent — `serializeBody` runs once,
+the bytes are hashed and sent verbatim, and Core re-hashes the received bytes.
+Only *cross-SDK* byte-identity is affected. Avoid integer-like keys / whole-number
+floats in signed payloads if cross-SDK hash identity is ever relied upon (audit/
+dedup). Also (Phase 3): **epoch-nanosecond span timestamps exceed 2^53 and lose
+precision as JS `number`** — represent them as `bigint`/string, never `number`.
+
 ---
 
 ## Open decisions (product/security — not plan defects)
@@ -85,6 +104,13 @@ on an audit counter-argument alone (surface new data instead).
   destructive hook types (db/file writes, non-idempotent HTTP)? A `fail_open`
   default turns any persistent 401 or Core outage into fleet-wide ALLOW with only a
   `fallback_used` flag. (Resolve before Phase 7 ships the default.)
+- **evaluate() fails CLOSED on 401/403** (Phase 2, `client/index.ts`), regardless
+  of `on_api_error` — a signing/auth rejection must never launder into a fail-open
+  ALLOW. **Trade-off (accepted):** a non-Core 403 (WAF/proxy/gateway/rate-limit)
+  also hard-fails. Kept fail-closed because Core often returns auth rejections with
+  **no machine reason code**, so a "no reason → treat as outage → fail-open" rule
+  would reintroduce the silent-governance-bypass vulnerability. Deployments behind
+  a 403-emitting proxy should be aware. (Revisit with Open Question 1.)
 - **DB driver version-support policy** for prototype patching (`pg`, `mysql2`,
   `mongodb`, redis client) — blocks Phase 5 DB blocking success criteria.
 - **Redaction default** for `db_statement` / bodies — redact-by-default vs opt-in.

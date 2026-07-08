@@ -128,6 +128,11 @@ Core `internal/content/governance.go` SpanData struct.
   that nulls remain present.
 - Field-name drift vs Core struct (e.g. `function` not `func_name`,
   `server_address` not `db_host`) → matrix tests pin exact wire keys.
+- **Epoch-nanosecond precision (carried from the Phase 2 review):** `start_time`/
+  `end_time` are epoch nanoseconds (int64), now ~1.75e18 — far above JS `number`'s
+  safe integer limit (2^53 ≈ 9e15). Representing them as a JS `number` silently
+  loses precision AND breaks Python parity. Use `bigint` (serialize as an unquoted
+  integer) or a string; never a JS `number`.
 
 ## Explicit Non-Goals
 

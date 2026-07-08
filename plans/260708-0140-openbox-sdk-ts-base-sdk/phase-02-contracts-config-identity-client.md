@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Contracts Config Identity Client"
-status: pending
+status: complete
 priority: P1
 effort: "4-5d"
 dependencies: [1]
@@ -122,17 +122,24 @@ serialization,client,config,approvals}.py`, `contracts/results.py`,
 
 ## Success Criteria
 
-- [ ] Golden signing test proves Python byte-parity (canonical/body/hex-hash/
+- [x] Golden signing test proves Python byte-parity (canonical/body/hex-hash/
       base64-sig/all 5 headers); non-ASCII payload hashes match Python (not raw UTF-8).
-- [ ] Raw-seed / JWK-`d` Ed25519 load throws; PKCS8-DER load reproduces the golden sig.
-- [ ] `Z` signing timestamp ⇒ different signature (format guard).
-- [ ] Unknown evaluate fields in `raw`; unknown/empty approval → pending (never ALLOW).
-- [ ] `guardrails` ≡ `guardrailsResult`.
-- [ ] Config rejects bad key + insecure non-local HTTP (incl. `localhost.evil.com`,
+- [x] Raw-seed / JWK-`d` Ed25519 load throws; PKCS8-DER load reproduces the golden sig.
+- [x] `Z` signing timestamp ⇒ different signature (format guard).
+- [x] Unknown evaluate fields in `raw`; unknown/empty approval → pending (never ALLOW).
+- [x] `guardrails` ≡ `guardrailsResult`.
+- [x] Config rejects bad key + insecure non-local HTTP (incl. `localhost.evil.com`,
       `[::1]` accepted); missing one of DID/privkey errors.
-- [ ] evaluate fail-closes / diagnoses on persistent 401; fail-opens only on network/5xx.
-- [ ] `ApprovalPoller` raises `ApprovalTimeoutError` on budget/consecutive-failure.
-- [ ] Root import-safety test still green.
+- [x] evaluate fail-closes / diagnoses on persistent 401; fail-opens only on network/5xx.
+- [x] `ApprovalPoller` raises `ApprovalTimeoutError` on budget/consecutive-failure.
+- [x] Root import-safety test still green.
+
+**Review-hardened (Phase 2 code review):** config redacts `apiKey`/`agentPrivateKey`
+from logs/JSON; empty-string `verdict` no longer shadows `action` (no fail-open);
+`checkExpiration` assumes UTC for tz-naive timestamps; blank timeout env var throws
+instead of becoming a 0ms abort. TS↔Python byte-parity is total for strings but
+not integer-like keys / whole-number floats (JS↔Python representational gaps; see
+ledger §6) — signing stays self-consistent so Core acceptance is unaffected.
 
 ## Risk Assessment
 
