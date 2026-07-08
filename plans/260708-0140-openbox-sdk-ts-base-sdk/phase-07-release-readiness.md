@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: "Release Readiness"
-status: pending
+status: complete
 priority: P2
 effort: "2-3d"
 dependencies: [6]
@@ -65,13 +65,26 @@ Docs:
 
 ## Success Criteria
 
-- [ ] Base SDK publishable as a standalone npm package (clean pack, import-light root).
-- [ ] Mastra migration releasable without undocumented public API breaks.
-- [ ] Docs state Mastra was the first consumer, not the source of base behavior.
-- [ ] Future TS SDKs have a clear adapter checklist.
-- [ ] CI covers lint/typecheck/test/build/pack.
-- [ ] Mastra release artifacts contain no local base-SDK path refs.
-- [ ] Clean temp-app installs packed Mastra + packed/published base and passes smoke.
+- [x] Base SDK publishable as a standalone npm package (clean pack — 163 files,
+      dist+README+LICENSE+CHANGELOG+docs only, no debris; import-light root).
+- [x] Mastra migration releasable without undocumented public API breaks
+      (81→91 additive; migration notes documented).
+- [x] Docs state Mastra was the first consumer, not the source of base behavior.
+- [x] Future TS SDKs have a clear adapter checklist (`docs/adapter-checklist.md`).
+- [x] CI covers lint/typecheck/test/build/pack (`.github/workflows/pr-quality.yml`).
+- [~] Mastra release artifacts contain no local base-SDK path refs — Mastra's dev
+      dep is `file:../openbox-sdk-ts`; the swap-to-published + artifact scan is a
+      **publish-time** step (base must be published to npm first — user-gated).
+- [x] Clean temp-app install smoke: packed BASE installs in a throwaway app; root
+      + subpath exports resolve + execute (canonical string verified). Full
+      packed-Mastra+base smoke is the publish-time gate ([~], with the dep swap).
+
+**Publish is user-gated** (needs npm auth + a registry). Prepared, not executed:
+`npm publish` the base SDK, then swap Mastra's `file:../openbox-sdk-ts` →
+`@openbox-ai/openbox-sdk@<version>`, then run the artifact scan
+(`file:`/`link:`/`workspace:`/`../openbox-sdk-ts` → zero) + the full packed-app
+smoke. **Open product decisions before GA** (see `docs/adapter-checklist.md` +
+ledger): OQ1 default `on_api_error` posture; redis typed-command blocking.
 
 ## Risk Assessment
 

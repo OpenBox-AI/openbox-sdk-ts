@@ -24,7 +24,7 @@ copy TS SDK behavior into base.
 
 ## Core endpoint contract (summary)
 
-Reference repo: `/Users/tino/code/openbox-core`. Canonical request builder
+Reference repo: `openbox-core` (sibling checkout). Canonical request builder
 independently re-verified 2026-07-08.
 
 | Endpoint | Method | Body | Notes |
@@ -63,7 +63,7 @@ the Go struct, **not** the SDK integration guide (the guide under-reports).
 
 ## Python base SDK → TS module map
 
-Reference repo: `/Users/tino/code/openbox-sdk-python` (package `openbox_core/`).
+Reference repo: `openbox-sdk-python` (sibling checkout; package `openbox_core/`).
 Internal `src/` layout is **inspired by Python, not a literal mirror**: Python has
 no top-level `spans/` and folds normalization under `wire/` + `validation/`; TS
 extracts a dedicated `spans/` (from Python `wire/core_span.py` +
