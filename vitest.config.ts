@@ -23,6 +23,14 @@ export default defineConfig({
     },
     environment: "node",
     globals: true,
-    include: ["test/**/*.test.ts"]
+    include: ["test/**/*.test.ts"],
+    // Default 5000ms is too tight for the FULL suite's parallelism: several
+    // files now do a genuine first-time `require()` of a heavy native driver
+    // (pg/redis/mysql2/mongodb) alongside the pre-existing Go-subprocess
+    // core-parity test, all competing for CPU across concurrent worker
+    // threads. Verified NOT a logic hang — every DB wrapper test completes
+    // in well under 1s when run in isolation; this is solely CI/parallel-run
+    // headroom.
+    testTimeout: 15000
   }
 });

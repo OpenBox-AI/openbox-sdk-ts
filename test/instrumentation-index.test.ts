@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import type * as NodeFsPromisesModule from "node:fs/promises";
+import type * as PgModule from "pg";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -33,6 +34,11 @@ function buildRuntime(fakeCore: FakeCore, instrumentation?: Partial<Instrumentat
 function fsPromisesCjs(): typeof NodeFsPromisesModule {
   const require = createRequire(import.meta.url);
   return require("node:fs/promises") as typeof NodeFsPromisesModule;
+}
+
+function pgCjs(): typeof PgModule {
+  const require = createRequire(import.meta.url);
+  return require("pg") as typeof PgModule;
 }
 
 let realFetch: typeof fetch;
@@ -209,6 +215,100 @@ describe("initOpenBoxInstrumentation — fail-loud (Decision 17)", () => {
       expect(globalThis.fetch).toBe(before);
     } finally {
       fsp.readFile = originalReadFile;
+    }
+  });
+});
+
+describe("initOpenBoxInstrumentation — DB driver opt-in (Tier A2/B, explicit, OQ5)", () => {
+  it("options.databases omitted installs no DB driver at all, even though dbEnabled defaults to true", () => {
+    const pg = pgCjs();
+    const beforeQuery = pg.Client.prototype.query;
+    const fakeCore = new FakeCore();
+    const runtime = buildRuntime(fakeCore);
+
+    controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
+    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "function"]);
+    expect(pg.Client.prototype.query).toBe(beforeQuery); // untouched — no driver was requested
+  });
+
+  it("databases: ['pg'] installs only pg among the DB tier", () => {
+    const pg = pgCjs();
+    const beforeQuery = pg.Client.prototype.query;
+    const fakeCore = new FakeCore();
+    const runtime = buildRuntime(fakeCore);
+
+    controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger, databases: ["pg"] });
+    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "function", "pg"]);
+    expect(pg.Client.prototype.query).not.toBe(beforeQuery);
+
+    controller.shutdown();
+    expect(pg.Client.prototype.query).toBe(beforeQuery);
+  });
+
+  it("dbEnabled=false skips every DB driver even when options.databases requests one", () => {
+    const pg = pgCjs();
+    const beforeQuery = pg.Client.prototype.query;
+    const fakeCore = new FakeCore();
+    const runtime = buildRuntime(fakeCore, { dbEnabled: false });
+
+    controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger, databases: ["pg"] });
+    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "function"]);
+    expect(pg.Client.prototype.query).toBe(beforeQuery);
+  });
+
+  it("idempotent shutdown restores every requested DB driver's handle, and double-shutdown is safe", () => {
+    const pg = pgCjs();
+    const beforeQuery = pg.Client.prototype.query;
+    const fakeCore = new FakeCore();
+    const runtime = buildRuntime(fakeCore);
+
+    const c = initOpenBoxInstrumentation({ runtime, logger: silentLogger, databases: ["pg"] });
+    expect(pg.Client.prototype.query).not.toBe(beforeQuery);
+
+    c.shutdown();
+    expect(pg.Client.prototype.query).toBe(beforeQuery);
+    c.shutdown(); // must not throw
+    expect(pg.Client.prototype.query).toBe(beforeQuery);
+  });
+
+  it("non-strict: an unpatchable requested driver emits a hard diagnostic and installs the OTHER targets (incl. other requested DB drivers) anyway", () => {
+    const pg = pgCjs();
+    const originalQuery = pg.Client.prototype.query;
+    // @ts-expect-error -- intentionally breaking the target for this one test
+    pg.Client.prototype.query = undefined;
+    const errors: string[] = [];
+    const logger = { warn() {}, error: (m: string) => errors.push(m), info() {} };
+
+    try {
+      const fakeCore = new FakeCore();
+      const runtime = buildRuntime(fakeCore);
+      controller = initOpenBoxInstrumentation({ runtime, logger, databases: ["pg"] });
+      expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "function"]); // pg excluded
+      expect(errors.some((m) => m.includes("pg"))).toBe(true);
+    } finally {
+      pg.Client.prototype.query = originalQuery;
+    }
+  });
+
+  it("strict mode throws OpenBoxInstrumentationError when a requested DB driver cannot be patched, and installs nothing", () => {
+    const pg = pgCjs();
+    const originalQuery = pg.Client.prototype.query;
+    // @ts-expect-error -- intentionally breaking the target for this one test
+    pg.Client.prototype.query = undefined;
+    const before = globalThis.fetch;
+
+    try {
+      const fakeCore = new FakeCore();
+      const runtime = buildRuntime(fakeCore);
+      expect(() =>
+        initOpenBoxInstrumentation({ runtime, strict: true, logger: silentLogger, databases: ["pg"] })
+      ).toThrow(OpenBoxInstrumentationError);
+      // Strict mode fails before completing installation: fetch/fs.promises/function
+      // were installed earlier in the sequence, but the whole call rolls back to
+      // nothing — never a half-patched state with no controller to undo it.
+      expect(globalThis.fetch).toBe(before);
+    } finally {
+      pg.Client.prototype.query = originalQuery;
     }
   });
 });

@@ -39,7 +39,13 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-argument": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",
       "@typescript-eslint/no-unused-vars": "off",
-      "@typescript-eslint/require-await": "off"
+      "@typescript-eslint/require-await": "off",
+      // Prototype-patching tests (pg/redis/mysql2/mongodb DB wrappers, fs.promises)
+      // legitimately capture/compare/reassign class-instance method REFERENCES
+      // off a `.prototype` object without ever calling them detached — the
+      // exact "monkey-patch for testing" false-positive typescript-eslint's
+      // own docs call out for this rule. Never relaxed in src/.
+      "@typescript-eslint/unbound-method": "off"
     }
   }
 );

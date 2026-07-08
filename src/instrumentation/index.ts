@@ -11,6 +11,22 @@
  * itself, and this module is never re-exported from the package root
  * (`src/index.ts`).
  *
+ * Also installs Tier A2/B database driver governance (`pg`, `redis`,
+ * `mysql2`, `mongodb`) — but ONLY for drivers the caller explicitly names via
+ * `options.databases` (resolving plan OQ5 as explicit opt-in, never
+ * auto-detected). Unlike fetch/fs, none of the four DB drivers are
+ * dependencies of this package at all (each is an OPTIONAL PEER, a
+ * devDependency of this repo for tests only) — attempting to `require()` one
+ * the caller never asked for would fail-loud/diagnose for a driver the host
+ * application may not even have installed, merely because instrumentation
+ * happens to be on. `instrumentation.dbEnabled` (default `true`) is the
+ * master kill switch for the whole DB tier, the same shape as
+ * `httpEnabled`/`fileEnabled`; `options.databases` (default empty — i.e. no
+ * driver is ever patched by default) selects WHICH drivers to attempt when
+ * that switch is on. Each requested driver is installed/rolled back through
+ * the SAME fail-loud `assertPatchable` and atomic-partial-failure handling
+ * already used for fetch/fs/function below.
+ *
  * Idempotency / concurrency-safety: `initOpenBoxInstrumentation` and
  * `shutdown()` are both fully SYNCHRONOUS (no internal `await`). Because
  * Node's event loop never preempts a running synchronous function, two
@@ -44,9 +60,22 @@ import {
 } from "./fetch-http-governance-patch.js";
 import { installFileIoPromisesWrapper, type FileIoPromisesWrapperHandle } from "./file-io-promises-wrapper.js";
 import { setTracedGovernanceRuntime } from "./function-wrapper-traced.js";
+import {
+  installMongodbCollectionCrudWrapper,
+  type MongodbCollectionCrudWrapperHandle
+} from "./mongodb-collection-crud-wrapper.js";
+import { installMysqlClientQueryWrapper, type MysqlClientQueryWrapperHandle } from "./mysql-client-query-wrapper.js";
+import {
+  installPostgresClientQueryWrapper,
+  type PostgresClientQueryWrapperHandle
+} from "./postgres-client-query-wrapper.js";
+import { installRedisCommandWrapper, type RedisCommandWrapperHandle } from "./redis-command-wrapper.js";
 
 export { traced, type TracedOptions } from "./function-wrapper-traced.js";
 export { isInternalCall, isSameOrigin, runAsInternal } from "./recursion-guard.js";
+
+/** Tier A2/B database drivers this controller can govern — see `options.databases` (explicit opt-in, OQ5). */
+export type DatabaseDriverName = "pg" | "redis" | "mysql2" | "mongodb";
 
 /**
  * Raised by opt-in strict mode when a target cannot be patched, and when
@@ -60,10 +89,17 @@ export interface InitOpenBoxInstrumentationOptions {
   /** Throw instead of emitting a hard diagnostic when a target cannot be patched. Default `false`. */
   readonly strict?: boolean;
   readonly logger?: ClientLogger;
+  /**
+   * Explicit opt-in list of DB drivers to attempt patching (OQ5 — never
+   * auto-detected). Default: none — `instrumentation.dbEnabled=true` alone
+   * does NOT patch any driver; the caller must additionally name it here.
+   * Ignored entirely when `instrumentation.dbEnabled` is `false`.
+   */
+  readonly databases?: readonly DatabaseDriverName[];
 }
 
 export interface OpenBoxInstrumentationController {
-  /** Targets successfully patched this call, e.g. `["fetch", "fs.promises", "function"]`. */
+  /** Targets successfully patched this call, e.g. `["fetch", "fs.promises", "function", "pg", "redis", "mysql2", "mongodb"]`. */
   readonly installedTargets: readonly string[];
   /** Governed HTTP requests observed with no bound ActivityContext. 0 when HTTP governance was not installed. */
   getSpanlessGovernedHttpRequestCount(): number;
@@ -126,6 +162,10 @@ export function initOpenBoxInstrumentation(
   let fetchHandle: FetchHttpGovernancePatchHandle | null = null;
   let fileHandle: FileIoPromisesWrapperHandle | null = null;
   let functionInstalled = false;
+  let pgHandle: PostgresClientQueryWrapperHandle | null = null;
+  let redisHandle: RedisCommandWrapperHandle | null = null;
+  let mysqlHandle: MysqlClientQueryWrapperHandle | null = null;
+  let mongodbHandle: MongodbCollectionCrudWrapperHandle | null = null;
 
   // Restores every target actually patched so far THIS call. Used both by the
   // public shutdown() and by the strict-mode failure path below — a strict
@@ -136,6 +176,10 @@ export function initOpenBoxInstrumentation(
     fetchHandle?.restore();
     fileHandle?.restore();
     if (functionInstalled) setTracedGovernanceRuntime(null);
+    pgHandle?.restore();
+    redisHandle?.restore();
+    mysqlHandle?.restore();
+    mongodbHandle?.restore();
   }
 
   try {
@@ -176,6 +220,64 @@ export function initOpenBoxInstrumentation(
         installedTargets.push("function");
       } else {
         logger.info("Function (traced()) instrumentation disabled by config (instrumentation.functionEnabled=false)");
+      }
+
+      if (!instrumentation.dbEnabled) {
+        logger.info("Database instrumentation disabled by config (instrumentation.dbEnabled=false)");
+      } else {
+        const requestedDatabases = new Set(options.databases ?? []);
+        if (requestedDatabases.size === 0) {
+          logger.info(
+            "Database instrumentation: no drivers requested (options.databases is empty) — explicit opt-in required, no driver patched"
+          );
+        } else {
+          // Fixed canonical order regardless of `options.databases` ordering,
+          // so `installedTargets` is deterministic for a given request set.
+          if (requestedDatabases.has("pg")) {
+            const installed = assertPatchable(
+              () => {
+                pgHandle = installPostgresClientQueryWrapper({ runtime, logger });
+              },
+              "pg",
+              strict,
+              logger
+            );
+            if (installed) installedTargets.push("pg");
+          }
+          if (requestedDatabases.has("redis")) {
+            const installed = assertPatchable(
+              () => {
+                redisHandle = installRedisCommandWrapper({ runtime, logger });
+              },
+              "redis",
+              strict,
+              logger
+            );
+            if (installed) installedTargets.push("redis");
+          }
+          if (requestedDatabases.has("mysql2")) {
+            const installed = assertPatchable(
+              () => {
+                mysqlHandle = installMysqlClientQueryWrapper({ runtime, logger });
+              },
+              "mysql2",
+              strict,
+              logger
+            );
+            if (installed) installedTargets.push("mysql2");
+          }
+          if (requestedDatabases.has("mongodb")) {
+            const installed = assertPatchable(
+              () => {
+                mongodbHandle = installMongodbCollectionCrudWrapper({ runtime, logger });
+              },
+              "mongodb",
+              strict,
+              logger
+            );
+            if (installed) installedTargets.push("mongodb");
+          }
+        }
       }
     }
   } catch (error) {

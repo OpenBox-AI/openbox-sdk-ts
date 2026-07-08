@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Node Instrumentation Hook Runtime"
-status: in_progress
+status: complete
 priority: P2
 effort: "Tier A1 2-3d; Tier A2 3-4d; Tier B 4-6d"
 dependencies: [4]
@@ -29,11 +29,19 @@ review DONE (no Critical/High/Medium; both bypass-class risks closed + op-did-no
 run tests). Recursion guard: internal-call flag (ALS `runAsInternal`, wired
 through `OpenBoxClient`'s own fetch calls) + `URL.origin` exact-equality — no
 `startsWith`, no no-active-span-skip. Redaction default resolved (see ledger).
-**Unblocks Phase 6** (with Phase 4). **Tier A2 (pg/redis) + Tier B
-(mysql/mongodb) remain pending** (decoupled — do not block Phase 6).
-Low follow-ups: span-less diagnostic counter under-counts a bound-but-incomplete
-context (observability only); resolve OQ4 (driver version policy) + OQ5
-(auto-detect vs explicit) before A2/B DB blocking.
+**Unblocks Phase 6** (with Phase 4).
+
+**Tier A2/B COMPLETE** (pg/redis/mysql2/mongodb custom prototype wrappers,
+lazy-required, explicit opt-in via `databases` [OQ5]; redis via custom
+`sendCommand`, never OTel [D15]; driver minimums pg>=8/mysql2>=3/mongodb>=6/
+node-redis v4-5 [OQ4]; drivers are optional devDep-only peers). Code review DONE.
+**Documented coverage limitations** ([`docs/instrumentation-coverage.md`](../../docs/instrumentation-coverage.md)):
+redis blocks `sendCommand([...])` ONLY — node-redis typed commands (`.get`/`.set`)
+bypass the patched method (loud install warning added; per-command wrapping
+deferred — fragile, no consumer). mongodb governs 12 methods incl. common writes
+(replaceOne/bulkWrite/findOneAndUpdate/Delete/Replace); cursors/change-streams are
+telemetry-only. pg/mysql callback forms pass through. Low follow-ups: span-less
+diagnostic counter under-count (observability); redis key PII in `db_statement`.
 
 ## Tier split (Phase 6 depends on Tier A1 only)
 
