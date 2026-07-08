@@ -1,0 +1,10 @@
+dist
+coverage
+node_modules
+*.tgz
+.DS_Store
+.eslintcache
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
