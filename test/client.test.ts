@@ -93,6 +93,36 @@ describe("pollApproval", () => {
   });
 });
 
+describe("evaluate — fail_closed_destructive outage policy", () => {
+  const opts = { onApiError: "fail_closed_destructive" as const };
+  const down = () => Promise.reject(new Error("down"));
+
+  it("fails CLOSED (throws) on outage for a destructive db write", async () => {
+    const c = client(down, opts);
+    await expect(
+      c.evaluate({ spans: [{ hook_type: "db_query", db_operation: "INSERT" }] })
+    ).rejects.toBeInstanceOf(GovernanceAPIError);
+  });
+
+  it("fails CLOSED on a 5xx outage for a non-idempotent HTTP write", async () => {
+    const c = client(async () => jsonResponse({}, 503), opts);
+    await expect(
+      c.evaluate({ spans: [{ hook_type: "http_request", http_method: "POST" }] })
+    ).rejects.toBeInstanceOf(GovernanceAPIError);
+  });
+
+  it("fails OPEN on outage for a read/idempotent op (GET, SELECT)", async () => {
+    const c = client(down, opts);
+    expect((await c.evaluate({ spans: [{ hook_type: "http_request", http_method: "GET" }] })).fallbackUsed).toBe(true);
+    expect((await c.evaluate({ spans: [{ hook_type: "db_query", db_operation: "SELECT" }] })).fallbackUsed).toBe(true);
+  });
+
+  it("fails OPEN on outage for a lifecycle event (no spans)", async () => {
+    const c = client(down, opts);
+    expect((await c.evaluate({ event_type: "ActivityStarted" })).fallbackUsed).toBe(true);
+  });
+});
+
 describe("checkExpiration", () => {
   it("flags past timestamps, treats tz-naive values as UTC, and leaves future ones", () => {
     expect(checkExpiration({ approval_expiration_time: "2000-01-01T00:00:00Z" }).expired).toBe(true);

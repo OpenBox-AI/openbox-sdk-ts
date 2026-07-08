@@ -23,7 +23,16 @@ import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identi
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
 const GLOBAL_ENV_PREFIX = "OPENBOX";
 
-export type OnApiError = "fail_open" | "fail_closed";
+/**
+ * Outage policy for a Core NETWORK/5xx failure. (Auth 401/403 ALWAYS fails closed,
+ * independent of this setting — a signing break never fail-opens.)
+ * - `fail_open` (default): proceed with a `fallbackUsed` flag on any outage.
+ * - `fail_closed`: block every governed op on an outage.
+ * - `fail_closed_destructive`: block only DESTRUCTIVE ops on an outage — db writes,
+ *   file writes, non-idempotent HTTP (POST/PUT/PATCH/DELETE) — while reads /
+ *   idempotent ops and lifecycle events (no spans) stay available.
+ */
+export type OnApiError = "fail_open" | "fail_closed" | "fail_closed_destructive";
 
 export interface HitlConfig {
   enabled: boolean;
@@ -145,7 +154,7 @@ export class OpenBoxConfig {
   apiUrl = "";
   apiKey = "";
   timeoutSeconds = 30.0;
-  onApiError: OnApiError = "fail_open"; // fail_open | fail_closed
+  onApiError: OnApiError = "fail_open"; // fail_open | fail_closed | fail_closed_destructive
   agentName: string | null = null;
   agentDid: string | null = null;
   agentPrivateKey: string | null = null; // never logged
@@ -220,9 +229,13 @@ export class OpenBoxConfig {
     }
     this.timeoutSeconds = timeout;
 
-    if (this.onApiError !== "fail_open" && this.onApiError !== "fail_closed") {
+    if (
+      this.onApiError !== "fail_open" &&
+      this.onApiError !== "fail_closed" &&
+      this.onApiError !== "fail_closed_destructive"
+    ) {
       throw new OpenBoxConfigError(
-        `onApiError must be 'fail_open' or 'fail_closed', got ${JSON.stringify(this.onApiError)}`
+        `onApiError must be 'fail_open', 'fail_closed', or 'fail_closed_destructive', got ${JSON.stringify(this.onApiError)}`
       );
     }
 

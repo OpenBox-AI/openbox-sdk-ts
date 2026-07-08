@@ -31,6 +31,7 @@ import {
 } from "../errors/index.js";
 import { prepareSignedRequest } from "../identity/index.js";
 import type { AgentIdentity } from "../identity/index.js";
+import type { OnApiError } from "../config/index.js";
 // Phase 5 wiring: every fetch this client makes is the SDK's OWN governance
 // traffic, never something to govern. `runAsInternal` marks the whole async
 // chain of each call below so the Node instrumentation fetch patch (which may
@@ -54,7 +55,7 @@ export interface ClientLogger {
 
 export interface OpenBoxClientOptions {
   timeoutSeconds?: number;
-  onApiError?: "fail_open" | "fail_closed";
+  onApiError?: OnApiError;
   identity?: AgentIdentity | null;
   sdkVersion?: string | null;
   sdkEngine?: string;
@@ -104,7 +105,7 @@ export class OpenBoxClient {
   private readonly apiUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
-  private readonly onApiError: "fail_open" | "fail_closed";
+  private readonly onApiError: OnApiError;
   private readonly identity: AgentIdentity | null;
   private readonly sdkVersion: string | null;
   private readonly sdkEngine: string | undefined;
@@ -115,8 +116,14 @@ export class OpenBoxClient {
 
   constructor(apiUrl: string, apiKey: string, options: OpenBoxClientOptions = {}) {
     const onApiError = options.onApiError ?? "fail_open";
-    if (onApiError !== "fail_open" && onApiError !== "fail_closed") {
-      throw new Error(`onApiError must be 'fail_open' or 'fail_closed', got ${String(onApiError)}`);
+    if (
+      onApiError !== "fail_open" &&
+      onApiError !== "fail_closed" &&
+      onApiError !== "fail_closed_destructive"
+    ) {
+      throw new Error(
+        `onApiError must be 'fail_open', 'fail_closed', or 'fail_closed_destructive', got ${String(onApiError)}`
+      );
     }
     this.apiUrl = apiUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
@@ -165,7 +172,7 @@ export class OpenBoxClient {
         })
       );
     } catch (e) {
-      return this.networkFailure(`Governance API unreachable: ${errorMessage(e)}`);
+      return this.networkFailure(`Governance API unreachable: ${errorMessage(e)}`, payload);
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -173,13 +180,13 @@ export class OpenBoxClient {
     }
     this.consecutiveAuthFailures = 0;
     if (response.status >= 400) {
-      return this.networkFailure(`Governance API error: HTTP ${response.status}`);
+      return this.networkFailure(`Governance API error: HTTP ${response.status}`, payload);
     }
     let data: unknown;
     try {
       data = await response.json();
     } catch (e) {
-      return this.networkFailure(`Governance API returned unparseable body: ${errorMessage(e)}`);
+      return this.networkFailure(`Governance API returned unparseable body: ${errorMessage(e)}`, payload);
     }
     const result = EvaluationResult.fromDict((data ?? {}) as Dict);
     if (verdictShouldStop(result.verdict)) {
@@ -188,10 +195,18 @@ export class OpenBoxClient {
     return result;
   }
 
-  /** Apply the onApiError policy to a NETWORK/outage failure. */
-  private networkFailure(reason: string): EvaluationResult {
+  /**
+   * Apply the onApiError policy to a NETWORK/outage failure. `fail_closed` blocks
+   * everything; `fail_closed_destructive` blocks only when the payload carries a
+   * destructive span (db/file write, non-idempotent HTTP) — reads/idempotent ops
+   * and lifecycle events (no spans) fail open; `fail_open` always fails open.
+   */
+  private networkFailure(reason: string, payload: JsonValue): EvaluationResult {
     this.logger.warn(reason);
-    if (this.onApiError === "fail_closed") throw new GovernanceAPIError(reason);
+    const failClosed =
+      this.onApiError === "fail_closed" ||
+      (this.onApiError === "fail_closed_destructive" && payloadHasDestructiveSpan(payload));
+    if (failClosed) throw new GovernanceAPIError(reason);
     return EvaluationResult.fallbackAllow(reason);
   }
 
@@ -303,5 +318,62 @@ async function safeText(response: Response): Promise<string | null> {
     return await response.text();
   } catch {
     return null;
+  }
+}
+
+// Destructive-operation classification for the `fail_closed_destructive` outage
+// policy. A destructive op mutates external state; a read/idempotent op does not.
+const DESTRUCTIVE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const DESTRUCTIVE_DB_OPERATIONS = new Set([
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "UPSERT",
+  "MERGE",
+  "REPLACE",
+  "CREATE",
+  "DROP",
+  "TRUNCATE",
+  "ALTER",
+  "GRANT",
+  "REVOKE"
+]);
+const DESTRUCTIVE_FILE_OPERATIONS = new Set(["write", "append"]);
+
+/**
+ * True if the evaluate payload carries a span for a destructive operation — a
+ * db/file WRITE or a non-idempotent HTTP method. Lifecycle events carry no spans
+ * → not destructive → they stay available under `fail_closed_destructive`.
+ * `function_call` and reads (GET/SELECT) cannot be classified destructive.
+ */
+function payloadHasDestructiveSpan(payload: JsonValue): boolean {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return false;
+  const spans = payload["spans"];
+  if (!Array.isArray(spans)) return false;
+  return spans.some(
+    (span) =>
+      typeof span === "object" && span !== null && !Array.isArray(span) && isDestructiveSpan(span)
+  );
+}
+
+function isDestructiveSpan(span: Record<string, JsonValue>): boolean {
+  switch (span["hook_type"]) {
+    case "http_request": {
+      const method = span["http_method"];
+      return typeof method === "string" && DESTRUCTIVE_HTTP_METHODS.has(method.toUpperCase());
+    }
+    case "db_query": {
+      const op = span["db_operation"];
+      return typeof op === "string" && DESTRUCTIVE_DB_OPERATIONS.has(op.toUpperCase());
+    }
+    case "file_operation": {
+      const op = span["file_operation"];
+      if (typeof op === "string" && DESTRUCTIVE_FILE_OPERATIONS.has(op.toLowerCase())) return true;
+      // fs write/append/read-write modes: w, a, r+, w+, a+.
+      const mode = span["file_mode"];
+      return typeof mode === "string" && /[wa+]/i.test(mode);
+    }
+    default:
+      return false;
   }
 }

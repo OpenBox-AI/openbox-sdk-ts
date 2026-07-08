@@ -55,6 +55,13 @@ describe("OpenBoxConfig.normalized — validation", () => {
     expect(resolve({ apiUrl: "https://x.com", apiKey: "obx_live_abc" }).apiKey).toBe("obx_live_abc");
   });
 
+  it("accepts the fail_closed_destructive outage policy", () => {
+    expect(
+      resolve({ apiUrl: "https://x.com", apiKey: "obx_test_k", onApiError: "fail_closed_destructive" })
+        .onApiError
+    ).toBe("fail_closed_destructive");
+  });
+
   it("rejects a non-numeric timeout and an invalid onApiError", () => {
     expect(() =>
       resolve({ apiUrl: "https://x.com", apiKey: "obx_test_k", timeoutSeconds: "abc" })

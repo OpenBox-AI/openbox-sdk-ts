@@ -172,25 +172,21 @@ reproducing a bug that has already been found and fixed once.
       clobber each other's bound activities or abort/halt flags through
       shared global state.
 
-## Two open product decisions — confirm before GA
+## Two product decisions — RESOLVED (SDK owner)
 
-These are **product/security decisions**, not implementation defects. Confirm
-an explicit answer before a future SDK (or this one) ships a GA default that
-silently depends on them.
+Both were confirmed; recorded here so future adapters inherit the posture.
 
-1. **`on_api_error` default posture.** Today the default is `fail_open`
-   fleet-wide for network/outage failures (auth/signing failures already fail
-   closed unconditionally — see above). A `fail_open` default means a
-   persistent Core outage silently turns into fleet-wide ALLOW (flagged only
-   by `fallbackUsed: true` on the result) for every hook type, including
-   destructive ones (DB writes, non-idempotent HTTP calls, irreversible
-   actions). Decide whether destructive hook types should default to
-   `fail_closed` instead, independent of the general network policy. See the
-   "Open decisions" section of
+1. **`on_api_error` default posture — RESOLVED.** Default stays `fail_open` for
+   network/outage failures (auth/signing 401/403 always fail closed). A third
+   opt-in config value, `fail_closed_destructive`, blocks only DESTRUCTIVE ops on
+   an outage — DB writes, file writes, non-idempotent HTTP (POST/PUT/PATCH/DELETE)
+   — while reads/idempotent ops and lifecycle events stay available. **Adapter
+   guidance:** surface this as a config option and let operators choose; do NOT
+   hard-code fail-closed. See
    [`contract-conflict-ledger.md`](contract-conflict-ledger.md).
-2. **`redis` typed-command blocking.** Current coverage blocks
-   `sendCommand([...])` only; normal typed usage (`.get()`, `.set()`, ...) is
-   neither blocked nor observed at all. Decide whether a future release needs
-   full typed-command coverage (this would require a different interception
-   strategy than prototype-patching `sendCommand`) before advertising `redis`
-   governance as complete in any consumer-facing material.
+2. **`redis` typed-command blocking — RESOLVED (accepted limitation).** Coverage
+   stays `sendCommand([...])`-only; typed commands (`.get()`/`.set()`) are
+   documented as NOT blocked (loud install warning +
+   [`instrumentation-coverage.md`](instrumentation-coverage.md)). Per-command
+   wrapping is deferred (fragile, version-coupled, no consumer). A future adapter
+   needing full redis blocking must revisit the interception strategy.

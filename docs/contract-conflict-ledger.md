@@ -108,10 +108,13 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
 
 ## Open decisions (product/security — not plan defects)
 
-- **`on_api_error` default:** keep `fail_open` fleet-wide, or `fail_closed` for
-  destructive hook types (db/file writes, non-idempotent HTTP)? A `fail_open`
-  default turns any persistent 401 or Core outage into fleet-wide ALLOW with only a
-  `fallback_used` flag. (Resolve before Phase 7 ships the default.)
+- **`on_api_error` default — RESOLVED (user decision):** default stays `fail_open`,
+  plus an opt-in third policy `fail_closed_destructive` (config value) that blocks
+  only DESTRUCTIVE ops on an outage — db writes, file writes, non-idempotent HTTP
+  (POST/PUT/PATCH/DELETE) — while reads/idempotent ops + lifecycle events (no spans)
+  stay available. Auth 401/403 always fails closed regardless (next item). The SDK
+  exposes the posture as config and lets operators choose; it does not force
+  fail-closed. (`client/index.ts` classifies destructiveness from the payload spans.)
 - **evaluate() fails CLOSED on 401/403** (Phase 2, `client/index.ts`), regardless
   of `on_api_error` — a signing/auth rejection must never launder into a fail-open
   ALLOW. **Trade-off (accepted):** a non-Core 403 (WAF/proxy/gateway/rate-limit)

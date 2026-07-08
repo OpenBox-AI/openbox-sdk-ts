@@ -38,7 +38,11 @@ golden fixtures plus a real Core-parity gate (see `docs/source-of-truth.md`).
   API. Fails **closed** on an auth/signing rejection (HTTP 401/403)
   regardless of the configured `onApiError` policy, so a persistent auth
   failure (revoked key, signing drift, clock skew) can never silently
-  degrade into a fleet-wide fail-open ALLOW.
+  degrade into a fleet-wide fail-open ALLOW. Outage (network/5xx) policy is
+  configurable via `onApiError`: `fail_open` (default), `fail_closed`, or
+  `fail_closed_destructive` — the last blocks only db/file writes +
+  non-idempotent HTTP on an outage, while reads/idempotent ops and lifecycle
+  events stay available.
 - **Approvals** (`ApprovalPoller`, subpath `./approvals`) — HITL poll-loop
   orchestration (interval, backoff, timeout budget, consecutive-failure
   ceiling) on top of `OpenBoxClient.pollApproval`, with strict, fail-safe
@@ -103,9 +107,8 @@ golden fixtures plus a real Core-parity gate (see `docs/source-of-truth.md`).
   ungoverned.
 - LLM-provider instrumentation is reserved
   (`config.instrumentation.llmEnabled`) but not yet implemented.
-- The `on_api_error` fleet-wide default (`fail_open`) and full `redis`
-  typed-command coverage are open product decisions — see
-  `docs/adapter-checklist.md`.
+- `redis` typed-command blocking is an accepted, documented limitation
+  (`sendCommand`-only) — see `docs/instrumentation-coverage.md`.
 
 ### Requirements
 
