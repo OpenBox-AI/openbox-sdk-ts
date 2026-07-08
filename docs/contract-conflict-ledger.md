@@ -93,8 +93,16 @@ gaps are **JS↔Python representational differences, unfixable at the serializer
 the bytes are hashed and sent verbatim, and Core re-hashes the received bytes.
 Only *cross-SDK* byte-identity is affected. Avoid integer-like keys / whole-number
 floats in signed payloads if cross-SDK hash identity is ever relied upon (audit/
-dedup). Also (Phase 3): **epoch-nanosecond span timestamps exceed 2^53 and lose
-precision as JS `number`** — represent them as `bigint`/string, never `number`.
+dedup).
+
+**Epoch-nanosecond span timestamps — RESOLVED (Phase 3): use JS `number`.**
+`start_time`/`end_time`/`duration_ns` are epoch nanoseconds (~1.75e18), above JS's
+safe-integer limit (2^53 ≈ 9e15), so a `number` carries ~256 ns of rounding. That
+is accepted: `number` serializes as an unquoted JSON integer Core parses as int64,
+no `.rego` policy reads these fields at ns precision (Decision 10), and timestamps
+never enter the OPA input map (verified against Core `opa.go`). `bigint` was
+rejected — it cannot pass `JSON.stringify` and buys no governance benefit. Cost:
+sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
 
 ---
 

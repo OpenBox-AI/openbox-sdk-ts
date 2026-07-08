@@ -18,5 +18,17 @@ export { SDK_VERSION } from "./version.js";
 // Result contracts (pure — no crypto/network).
 export * from "./contracts/results.js";
 
+// Event contracts, span field matrices, and diagnostics (pure — no
+// crypto/network; hook/OTel span capture itself is a later phase).
+export * from "./contracts/otel-spans.js";
+export * from "./contracts/events.js";
+export * from "./contracts/event-factories.js";
+export * from "./contracts/diagnostics.js";
+
 // Error hierarchy (pure).
 export * from "./errors/index.js";
+
+// Always-strict validation gate helpers (pure — validate/stamp/strip/finalize
+// + raiseForVerdict; does NOT call the network client itself — see
+// src/gate/index.ts and the future OpenBoxRuntime composition root).
+export * from "./gate/index.js";

@@ -1,14 +1,26 @@
 ---
-title: "OpenBox TypeScript Base SDK + Mastra Adapter Migration"
-description: "Build @openbox-ai/openbox-sdk as the TS base SDK equivalent of openbox-sdk-python, grounded byte-for-byte in openbox-core wire contracts and Python base-SDK behavior, then migrate openbox-mastra-sdk to consume it as a thin adapter."
-status: in_progress
+title: OpenBox TypeScript Base SDK + Mastra Adapter Migration
+description: >-
+  Build @openbox-ai/openbox-sdk as the TS base SDK equivalent of
+  openbox-sdk-python, grounded byte-for-byte in openbox-core wire contracts and
+  Python base-SDK behavior, then migrate openbox-mastra-sdk to consume it as a
+  thin adapter.
+status: pending
 priority: P1
-branch: ""
-tags: [sdk, governance, typescript, node, signing, instrumentation, mastra, migration]
+branch: ''
+tags:
+  - sdk
+  - governance
+  - typescript
+  - node
+  - signing
+  - instrumentation
+  - mastra
+  - migration
 blockedBy: []
 blocks: []
-created: "2026-07-07T19:27:03.154Z"
-createdBy: "ck:plan"
+created: '2026-07-07T19:27:03.154Z'
+createdBy: 'ck:plan'
 source: skill
 ---
 
@@ -203,7 +215,7 @@ Verified against source; each phase's tests must enforce them.
 |-------|------|--------|
 | 1 | [Repo Scaffolding And Source Audit](./phase-01-repo-scaffolding-and-source-audit.md) | ✅ Complete |
 | 2 | [Contracts Config Identity Client](./phase-02-contracts-config-identity-client.md) | ✅ Complete |
-| 3 | [Event Wire Span Gate](./phase-03-event-wire-span-gate.md) | Pending |
+| 3 | [Event Wire Span Gate](./phase-03-event-wire-span-gate.md) | ✅ Complete |
 | 4 | [Runtime Adapter Conformance](./phase-04-runtime-adapter-conformance.md) | Pending |
 | 5 | [Node Instrumentation Hook Runtime](./phase-05-node-instrumentation-hook-runtime.md) (Tier A1/A2/B) | Pending |
 | 6 | [Mastra Adapter Migration](./phase-06-mastra-adapter-migration.md) | Pending |

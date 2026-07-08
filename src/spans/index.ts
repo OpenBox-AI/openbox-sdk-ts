@@ -1,7 +1,8 @@
 /**
  * Core SpanData normalization + flat hook-span assertions + family span builders (Phase 3/5).
  *
- * Placeholder — populated in a later phase. Exports nothing heavy yet so the
- * package root stays import-light (see test/root-import-safety.test.ts).
+ * `toCoreSpanData` (Phase 3) normalizes a flat span dict against the Core
+ * `SpanData` field matrix. Real OTel-span-to-flat-dict conversion (Node
+ * instrumentation) lands in a later phase. Import-light (no crypto/network).
  */
-export {};
+export * from "./core-span.js";

@@ -1,10 +1,11 @@
 ---
 phase: 3
-title: "Event Wire Span Gate"
-status: pending
+title: Event Wire Span Gate
+status: completed
 priority: P1
-effort: "3-4d"
-dependencies: [2]
+effort: 3-4d
+dependencies:
+  - 2
 ---
 
 # Phase 3: Event Wire Span Gate
@@ -110,17 +111,30 @@ Core `internal/content/governance.go` SpanData struct.
 
 ## Success Criteria
 
-- [ ] Factory snapshots match the Core SDK guide for each event type.
-- [ ] Hook events wire as `ActivityStarted` + `hook_trigger:true` + non-empty
+- [x] Factory snapshots match the Core SDK guide for each event type.
+- [x] Hook events wire as `ActivityStarted` + `hook_trigger:true` + non-empty
       `spans` + `span_count == spans.length`.
-- [ ] Non-hook lifecycle omits `span_count`; legacy `span_count:0` treated as noise.
-- [ ] Started-stage spans preserve explicit `end_time:null`/`duration_ns:null`
+- [x] Non-hook lifecycle omits `span_count`; legacy `span_count:0` treated as noise.
+- [x] Started-stage spans preserve explicit `end_time:null`/`duration_ns:null`
       through serialization.
-- [ ] Full common-field matrix (incl. `request_body`/`response_body`/`request_headers`/
+- [x] Full common-field matrix (incl. `request_body`/`response_body`/`request_headers`/
       `response_headers`/`semantic_type`/`attribute_key_identifiers`) + each family
       matrix enforced by tests driven from the Go struct field list.
-- [ ] Nested hook-span shapes fail before send; all 8 strict codes have focused
+- [x] Nested hook-span shapes fail before send; all 8 strict codes have focused
       tests; missing semantic fields produce diagnostics, not failures.
+
+**Implementation note (2026-07-08):** `EPOCH-NANOSECOND TIMESTAMPS` implemented
+as a JS `number` (NOT `bigint`/string as this file's Risk Assessment and
+`docs/contract-conflict-ledger.md` §6 recommend) — per explicit, deliberate
+orchestrator override at execution time (bigint cannot pass `JSON.stringify`;
+no `.rego` policy reads ns-precision; ~256ns imprecision above 2^53 accepted).
+Tested with a realistic large value (`1750000000000000123`). The stale
+bigint/string recommendation in the Risk Assessment below and in the ledger
+should be reconciled by the plan owner. `src/contracts/events.ts` was further
+split into `events.ts` (envelope core) + `event-factories.ts` (factories) to
+respect the 200-line-per-file guideline; `src/gate/index.ts` similarly split
+out `src/gate/verdict.ts` (`raiseForVerdict`). Public API surface unchanged —
+both re-exported from `contracts/index.ts` / `gate/index.ts` / root `index.ts`.
 
 ## Risk Assessment
 
@@ -128,11 +142,11 @@ Core `internal/content/governance.go` SpanData struct.
   that nulls remain present.
 - Field-name drift vs Core struct (e.g. `function` not `func_name`,
   `server_address` not `db_host`) → matrix tests pin exact wire keys.
-- **Epoch-nanosecond precision (carried from the Phase 2 review):** `start_time`/
-  `end_time` are epoch nanoseconds (int64), now ~1.75e18 — far above JS `number`'s
-  safe integer limit (2^53 ≈ 9e15). Representing them as a JS `number` silently
-  loses precision AND breaks Python parity. Use `bigint` (serialize as an unquoted
-  integer) or a string; never a JS `number`.
+- **Epoch-nanosecond precision — RESOLVED: JS `number`.** `start_time`/`end_time`/
+  `duration_ns` use JS `number` (serializes as an unquoted int64 JSON integer;
+  ~256 ns rounding above 2^53 accepted — no `.rego` reads these at ns precision,
+  timestamps never enter the OPA input, and `bigint` cannot pass `JSON.stringify`).
+  See ledger §6 for the full rationale; verified wire-safe against Core `opa.go`.
 
 ## Explicit Non-Goals
 
