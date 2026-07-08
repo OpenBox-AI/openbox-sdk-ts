@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Mastra Adapter Migration"
-status: pending
+status: complete
 priority: P2
 effort: "6-8d"
 dependencies: [4]
@@ -103,13 +103,31 @@ Modify (in `openbox-mastra-sdk`):
 
 ## Success Criteria
 
-- [ ] Mastra tests pass after expected fixture updates.
-- [ ] Public exports stable or with documented migration notes; the 98-symbol diff
+- [x] Mastra tests pass after expected fixture updates (195/195; +48 tests).
+- [x] Public exports stable — 81→91 additive (0 removed/renamed); the export diff
       shows full coverage (incl. `workflow-span-buffer` repointed to base `Verdict`).
-- [ ] Mastra no longer owns shared signing/client/result/event/span behavior.
-- [ ] Exactly one governance event per instrumented pg query (no double-governance).
-- [ ] Base conformance kit runs green inside Mastra.
-- [ ] Rollback path (base-vs-legacy flag) exists for each swapped surface.
+- [x] Mastra no longer owns shared signing/result/event/config/error BEHAVIOR
+      (delegated to base). The `OpenBoxClient` API *shell* is retained (surgical
+      patch) for wire/response-shape compat, but its signing + verdict-parsing
+      delegate to base transitively — no divergent copy.
+- [x] Exactly one governance event per instrumented pg query (asserted `.toBe(1)`;
+      base DB blocking NOT enabled — Mastra keeps its OTel-pg telemetry).
+- [x] Base conformance kit runs green inside Mastra (non-no-op assertions).
+- [~] Rollback path: per-file `git revert` (each delegated surface is an isolated
+      file/hunk) rather than a runtime base-vs-legacy flag — accepted deviation
+      (YAGNI; documented in migration notes).
+
+**Review-hardened (Phase 6 code review):** the fail-open-on-auth fix (red-team
+Critical #4) was initially only at the client boundary — the production evaluate
+WRAPPERS re-swallowed the thrown `OpenBoxAuthError` and fail-opened under the
+default `fail_open`. Fixed: Started/pre-op/resume events now fail CLOSED on
+auth/signing/contract/governance-API errors (mirroring base `isFailClosedCondition`),
+completed events stay telemetry-fail-open. Also aligned approval empty-action
+parsing to base, dropped dead code, added base-drift-parity + signing-error tests.
+**Config divergence** kept in Mastra (multiAgent resolver). **Kept-local** (validated):
+`guardrails.ts` (base null vs Mastra undefined contract), `governance/{context,
+approval-registry}.ts` (no base equivalent). **Base dep** = dev `file:../openbox-sdk-ts`;
+Phase 7 swaps to published.
 
 ## Risk Assessment
 

@@ -218,7 +218,7 @@ Verified against source; each phase's tests must enforce them.
 | 3 | [Event Wire Span Gate](./phase-03-event-wire-span-gate.md) | ✅ Complete |
 | 4 | [Runtime Adapter Conformance](./phase-04-runtime-adapter-conformance.md) | ✅ Complete |
 | 5 | [Node Instrumentation Hook Runtime](./phase-05-node-instrumentation-hook-runtime.md) (Tier A1/A2/B) | ✅ Complete (A1 + A2/B) |
-| 6 | [Mastra Adapter Migration](./phase-06-mastra-adapter-migration.md) | Pending |
+| 6 | [Mastra Adapter Migration](./phase-06-mastra-adapter-migration.md) | ✅ Complete (branch `feat/openbox-base-sdk-migration`) |
 | 7 | [Release Readiness](./phase-07-release-readiness.md) | Pending |
 
 Dependency chain: `1 → 2 → 3 → 4 → {5, 6}`. **Phase 6 hard-gates on Phase 4**

@@ -10,6 +10,7 @@ Entry point for `openbox-sdk-ts` project notes. One line per note.
 ## Debugging
 
 - [debug-redis-typed-commands-bypass-sendcommand](debug-redis-typed-commands-bypass-sendcommand.md) — why node-redis `.get()`/`.set()` slip past a `sendCommand` prototype patch (closure-bound at module load); redis blocking is `sendCommand`-only by design.
+- [debug-adapter-fail-closed-must-be-enforced-at-wrapper-layer](debug-adapter-fail-closed-must-be-enforced-at-wrapper-layer.md) — a base client that throws on 401/403 is defeated by an adapter wrapper that catch-alls + fail-opens; adapters must rethrow fail-closed errors at the pre-op boundary.
 
 ## Decisions
 
