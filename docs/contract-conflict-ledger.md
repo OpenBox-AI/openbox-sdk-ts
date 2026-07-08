@@ -121,7 +121,15 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
   a 403-emitting proxy should be aware. (Revisit with Open Question 1.)
 - **DB driver version-support policy** for prototype patching (`pg`, `mysql2`,
   `mongodb`, redis client) — blocks Phase 5 DB blocking success criteria.
-- **Redaction default** for `db_statement` / bodies — redact-by-default vs opt-in.
+- **Redaction default — RESOLVED (Phase 5 Tier A1):** credential HTTP headers
+  (`authorization`, `cookie`, `x-api-key`, …) are redacted **unconditionally**
+  before signing (they are never needed for a policy decision). Bodies are
+  length-truncated (`maxBodySize`) but not field-redacted; function `args`/`result`
+  are captured verbatim (opt-out `captureArgs`/`captureResult:false`). Rationale:
+  Core is the trusted governance backend that MUST inspect payloads to decide —
+  redacting everything would blind governance. Matches Python. `db_statement`
+  redaction default is deferred to Tier A2. Consumers with PII in args/bodies
+  should set `redactKeys` or the capture opt-outs.
 
 ## Node engine
 

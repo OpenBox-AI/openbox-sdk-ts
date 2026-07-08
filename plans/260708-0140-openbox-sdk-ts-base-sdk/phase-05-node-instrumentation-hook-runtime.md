@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Node Instrumentation Hook Runtime"
-status: pending
+status: in_progress
 priority: P2
 effort: "Tier A1 2-3d; Tier A2 3-4d; Tier B 4-6d"
 dependencies: [4]
@@ -20,6 +20,20 @@ delivered via custom wrappers, never OTel** (OTel cannot block any Node driver).
 *only* fetch/fs/function; DB preflight (pg/redis/mysql/mongodb) has no current
 consumer (Mastra uses OTel DB telemetry). Kept at user direction; Tiers A2/B are
 decoupled from Phase 6 so they cannot delay the migration.
+
+## Status
+
+**Tier A1 COMPLETE** (fetch + fs.promises + function wrapper, recursion guard,
+fail-loud init/shutdown controller, http/file/function span builders). Code
+review DONE (no Critical/High/Medium; both bypass-class risks closed + op-did-not-
+run tests). Recursion guard: internal-call flag (ALS `runAsInternal`, wired
+through `OpenBoxClient`'s own fetch calls) + `URL.origin` exact-equality — no
+`startsWith`, no no-active-span-skip. Redaction default resolved (see ledger).
+**Unblocks Phase 6** (with Phase 4). **Tier A2 (pg/redis) + Tier B
+(mysql/mongodb) remain pending** (decoupled — do not block Phase 6).
+Low follow-ups: span-less diagnostic counter under-counts a bound-but-incomplete
+context (observability only); resolve OQ4 (driver version policy) + OQ5
+(auto-detect vs explicit) before A2/B DB blocking.
 
 ## Tier split (Phase 6 depends on Tier A1 only)
 

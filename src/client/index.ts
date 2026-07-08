@@ -31,6 +31,16 @@ import {
 } from "../errors/index.js";
 import { prepareSignedRequest } from "../identity/index.js";
 import type { AgentIdentity } from "../identity/index.js";
+// Phase 5 wiring: every fetch this client makes is the SDK's OWN governance
+// traffic, never something to govern. `runAsInternal` marks the whole async
+// chain of each call below so the Node instrumentation fetch patch (which may
+// have replaced `globalThis.fetch` — this client's `fetchImpl` default —
+// either before or after this client was constructed) sees
+// `isInternalCall() === true` and skips governance unconditionally, instead
+// of recursing into evaluating its own evaluate/approval/auth-validate calls.
+// `recursion-guard.ts` is a dependency-free leaf (only `node:async_hooks`),
+// so this import cannot create a cycle back through `runtime`/`instrumentation`.
+import { runAsInternal } from "../instrumentation/recursion-guard.js";
 
 export const EVALUATE_PATH = "/api/v1/governance/evaluate";
 export const APPROVAL_PATH = "/api/v1/governance/approval";
@@ -146,12 +156,14 @@ export class OpenBoxClient {
     const { url, headers, body } = this.prepared("POST", EVALUATE_PATH, payload);
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
+      response = await runAsInternal(() =>
+        this.fetchImpl(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(this.timeoutMs)
+        })
+      );
     } catch (e) {
       return this.networkFailure(`Governance API unreachable: ${errorMessage(e)}`);
     }
@@ -219,12 +231,14 @@ export class OpenBoxClient {
     const { url, headers, body } = this.prepared("POST", APPROVAL_PATH, payload);
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
+      response = await runAsInternal(() =>
+        this.fetchImpl(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(this.timeoutMs)
+        })
+      );
     } catch (e) {
       this.logger.warn(`Failed to poll approval status: ${errorMessage(e)}`);
       return null;
@@ -256,11 +270,13 @@ export class OpenBoxClient {
     const { url, headers } = this.prepared("GET", AUTH_VALIDATE_PATH, null);
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        method: "GET",
-        headers,
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
+      response = await runAsInternal(() =>
+        this.fetchImpl(url, {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(this.timeoutMs)
+        })
+      );
     } catch (e) {
       throw new OpenBoxNetworkError(`Cannot reach OpenBox Core at ${this.apiUrl}: ${errorMessage(e)}`);
     }
