@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CoreAdapter } from "../src/adapters/base.js";
 import { ApprovalPoller } from "../src/approvals/index.js";
 import type { OpenBoxClient } from "../src/client/index.js";
+import { ActivityContext } from "../src/contracts/context.js";
 import { ApprovalResult, EvaluationResult, Verdict } from "../src/contracts/results.js";
 import {
   ApprovalExpiredError,
@@ -14,6 +15,16 @@ import {
 /** Fake client exposing only pollApproval — the sole surface ApprovalPoller uses (mirrors test/approvals.test.ts). */
 function fakeClient(pollApproval: () => Promise<ApprovalResult | null>): OpenBoxClient {
   return { pollApproval } as unknown as OpenBoxClient;
+}
+
+/** Fake client that records the (workflowId, runId, activityId) each poll is called with, then allows. */
+function idRecordingClient(seen: [string, string, string][]): OpenBoxClient {
+  return {
+    pollApproval: (w: string, r: string, a: string) => {
+      seen.push([w, r, a]);
+      return Promise.resolve(ApprovalResult.fromDict({ action: "allow" }));
+    }
+  } as unknown as OpenBoxClient;
 }
 
 function requireApproval(overrides: Partial<EvaluationResult> = {}): EvaluationResult {
@@ -100,24 +111,41 @@ describe("CoreAdapter.handleApproval — with a poller configured", () => {
     );
   });
 
-  it("passes workflow_id/run_id/activity_id read from result.raw to the poller", async () => {
+  it("polls with the IDs from the passed context — NOT result.raw (Core omits them)", async () => {
     const seen: [string, string, string][] = [];
-    const poller = new ApprovalPoller(
-      {
-        pollApproval: (w: string, r: string, a: string) => {
-          seen.push([w, r, a]);
-          return Promise.resolve(ApprovalResult.fromDict({ action: "allow" }));
-        }
-      } as unknown as OpenBoxClient,
-      { pollIntervalMs: 1 }
-    );
+    const poller = new ApprovalPoller(idRecordingClient(seen), { pollIntervalMs: 1 });
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    // raw is EMPTY, exactly as a real Core evaluate response is — the poll IDs
+    // must come from the context the runtime threads in.
+    const result = requireApproval({ approvalId: "appr-1" });
+    const context = new ActivityContext({ workflowId: "wf-1", runId: "run-1", activityId: "act-1" });
+    await adapter.handleApproval(result, context);
+    expect(seen).toStrictEqual([["wf-1", "run-1", "act-1"]]);
+  });
+
+  it("falls back to result.raw when no context is passed (backward compat)", async () => {
+    const seen: [string, string, string][] = [];
+    const poller = new ApprovalPoller(idRecordingClient(seen), { pollIntervalMs: 1 });
     const adapter = new CoreAdapter({ approvalPoller: poller });
     const result = requireApproval({
       approvalId: "appr-1",
-      raw: { workflow_id: "wf-1", run_id: "run-1", activity_id: "act-1" }
+      raw: { workflow_id: "wf-raw", run_id: "run-raw", activity_id: "act-raw" }
     });
     await adapter.handleApproval(result);
-    expect(seen).toStrictEqual([["wf-1", "run-1", "act-1"]]);
+    expect(seen).toStrictEqual([["wf-raw", "run-raw", "act-raw"]]);
+  });
+
+  it("prefers context IDs over any stale result.raw echo", async () => {
+    const seen: [string, string, string][] = [];
+    const poller = new ApprovalPoller(idRecordingClient(seen), { pollIntervalMs: 1 });
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    const result = requireApproval({
+      approvalId: "appr-1",
+      raw: { workflow_id: "wf-stale", run_id: "run-stale", activity_id: "act-stale" }
+    });
+    const context = new ActivityContext({ workflowId: "wf-ctx", runId: "run-ctx", activityId: "act-ctx" });
+    await adapter.handleApproval(result, context);
+    expect(seen).toStrictEqual([["wf-ctx", "run-ctx", "act-ctx"]]);
   });
 });
 

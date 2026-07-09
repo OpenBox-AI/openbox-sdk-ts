@@ -69,7 +69,9 @@ export class HookEvaluator {
       throw new GovernanceBlockedError(result.verdict, result.reason ?? "Blocked (adapter returned)");
     }
     if (verdictRequiresApproval(result.verdict)) {
-      await this.deps.adapter.handleApproval(result);
+      // Core's evaluate response omits the workflow/run/activity IDs, so hand
+      // the bound context (which carries all three) for the approval poll.
+      await this.deps.adapter.handleApproval(result, bound.ctx);
     }
     return result;
   }

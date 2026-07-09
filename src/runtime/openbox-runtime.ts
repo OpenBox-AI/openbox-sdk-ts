@@ -19,6 +19,7 @@ import { CoreAdapter } from "../adapters/base.js";
 import { OpenBoxClient, type ClientLogger } from "../client/index.js";
 import type { OpenBoxConfig } from "../config/index.js";
 import { ContextStore } from "../context/index.js";
+import { ActivityContext } from "../contracts/context.js";
 import type { EventEnvelope } from "../contracts/events.js";
 import { Verdict, verdictRequiresApproval, verdictShouldStop, type EvaluationResult } from "../contracts/results.js";
 import { GovernanceBlockedError, GuardrailsValidationError } from "../errors/index.js";
@@ -88,7 +89,7 @@ export class OpenBoxRuntime {
     const result = await this.client.evaluate(payload);
     if (verdictRequiresApproval(result.verdict)) {
       this.checkGuardrails(result);
-      await this.adapter.handleApproval(result);
+      await this.adapter.handleApproval(result, approvalContextFromEvent(event));
       return result;
     }
     return this.enforceLifecycle(result);
@@ -132,4 +133,23 @@ export class OpenBoxRuntime {
     this.closed = true;
     this.contextStore.clear();
   }
+}
+
+/**
+ * Approval context for a lifecycle event. `workflow_id`/`run_id` live in the
+ * flat wire `payload`; `activity_id` is a first-class envelope field (a
+ * workflow-level approval legitimately has none). Core's evaluate response
+ * omits all three, so the poll must be built from the originating event — see
+ * `CoreAdapter.handleApproval`.
+ */
+function approvalContextFromEvent(event: EventEnvelope): ActivityContext {
+  const payload = event.payload;
+  const workflowId = payload["workflow_id"];
+  const runId = payload["run_id"];
+  const activityId = payload["activity_id"];
+  return new ActivityContext({
+    workflowId: typeof workflowId === "string" ? workflowId : null,
+    runId: typeof runId === "string" ? runId : null,
+    activityId: event.activityId ?? (typeof activityId === "string" ? activityId : null)
+  });
 }

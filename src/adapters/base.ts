@@ -28,8 +28,14 @@ export interface FrameworkAdapter {
    *
    * Resolve normally when approved; reject with the framework's native
    * rejection/expiry error otherwise. Called BEFORE the real operation runs.
+   *
+   * `context` carries the workflow/run/activity IDs the approval poll needs.
+   * Core's evaluate response does NOT echo them, so they cannot be recovered
+   * from `result.raw`; the runtime passes the originating `ActivityContext`
+   * (lifecycle events build one from the event). Optional so adapters that
+   * predate this argument still satisfy the interface.
    */
-  handleApproval(result: EvaluationResult): Promise<void>;
+  handleApproval(result: EvaluationResult, context?: ActivityContext | null): Promise<void>;
 
   /**
    * Optional synchronous approval seam for frameworks/wrappers that cannot
@@ -72,6 +78,23 @@ function readRawString(raw: Readonly<Record<string, unknown>>, key: string): str
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * Resolve the workflow/run/activity IDs the approval poll must send. Core's
+ * evaluate response does not echo them, so the originating `ActivityContext`
+ * is authoritative. `result.raw` remains a fallback only for a caller that
+ * predates the `context` argument (it is empty in real Core traffic).
+ */
+function approvalPollIds(
+  result: EvaluationResult,
+  context: ActivityContext | null | undefined
+): { workflowId: string; runId: string; activityId: string } {
+  return {
+    workflowId: context?.workflowId || readRawString(result.raw, "workflow_id"),
+    runId: context?.runId || readRawString(result.raw, "run_id"),
+    activityId: context?.activityId || readRawString(result.raw, "activity_id")
+  };
+}
+
 export interface CoreAdapterOptions {
   /**
    * Enables a real HITL wait for REQUIRE_APPROVAL. Without one, approval is
@@ -96,17 +119,14 @@ export class CoreAdapter implements FrameworkAdapter {
     this.poller = options.approvalPoller ?? null;
   }
 
-  async handleApproval(result: EvaluationResult): Promise<void> {
+  async handleApproval(result: EvaluationResult, context?: ActivityContext | null): Promise<void> {
     if (this.poller === null || !result.approvalId) {
       throw new ApprovalRejectedError(
         "REQUIRE_APPROVAL verdict but no approval flow is configured — failing safe (operation not run)"
       );
     }
-    const approval = await this.poller.waitForDecision(
-      readRawString(result.raw, "workflow_id"),
-      readRawString(result.raw, "run_id"),
-      readRawString(result.raw, "activity_id")
-    );
+    const ids = approvalPollIds(result, context);
+    const approval = await this.poller.waitForDecision(ids.workflowId, ids.runId, ids.activityId);
     if (approval.allowShaped) return;
     if (approval.expired) {
       throw new ApprovalExpiredError(approval.reason ?? "Approval window expired");

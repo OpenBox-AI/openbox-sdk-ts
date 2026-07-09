@@ -13,7 +13,11 @@ import { Verdict, type EvaluationResult } from "../contracts/results.js";
 import { ApprovalExpiredError, ApprovalRejectedError, GovernanceBlockedError, GovernanceHaltError } from "../errors/index.js";
 
 export type FakeAdapterCall =
-  | { readonly kind: "handleApproval"; readonly result: EvaluationResult }
+  | {
+      readonly kind: "handleApproval";
+      readonly result: EvaluationResult;
+      readonly context: ActivityContext | null;
+    }
   | { readonly kind: "raiseLifecycleBlocked"; readonly result: EvaluationResult }
   | { readonly kind: "raiseHookBlocked"; readonly result: EvaluationResult }
   | {
@@ -56,8 +60,8 @@ export class FakeAdapter implements FrameworkAdapter {
   // synchronous exception from the call site itself. The `await` below is
   // genuine (not a no-op): it also makes this fake behave more like a real
   // adapter driving an async approval flow, one microtask later.
-  async handleApproval(result: EvaluationResult): Promise<void> {
-    this.calls.push({ kind: "handleApproval", result });
+  async handleApproval(result: EvaluationResult, context: ActivityContext | null = null): Promise<void> {
+    this.calls.push({ kind: "handleApproval", result, context });
     await Promise.resolve();
     if (this.approvalOutcome === "allow") return;
     if (this.approvalOutcome === "expire") {
