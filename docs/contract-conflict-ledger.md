@@ -122,6 +122,20 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
   **no machine reason code**, so a "no reason → treat as outage → fail-open" rule
   would reintroduce the silent-governance-bypass vulnerability. Deployments behind
   a 403-emitting proxy should be aware. (Revisit with Open Question 1.)
+- **Non-auth 4xx follows `on_api_error` (NOT fail-closed) — RESOLVED (user
+  decision, reviewed 2026-07-09):** every non-401/403 status `>= 400` routes through
+  `networkFailure()` and honors `on_api_error`. Under the default `fail_open`, a
+  Core 400/404/422 (malformed payload / wrong endpoint / schema reject) therefore
+  yields a `fallback_used=true` ALLOW, not a throw — the same as a 5xx/timeout.
+  **Trade-off (accepted):** a contract/version mismatch that makes Core reject the
+  SDK's payload silently lets the governed op proceed under `fail_open` — an
+  availability-preserving miss, not a fail-closed. A red-team review flagged this as
+  a fail-open hole; the maintainer chose to keep the behavior. Operators who want
+  these blocked set `on_api_error=fail_closed` (all outages incl. 4xx) or
+  `fail_closed_destructive` (destructive ops only). Auth 401/403 still hard-fails
+  regardless (previous item). Mirrors `openbox-sdk-python`
+  `_parse_evaluate_response`. The "network/outage only" framing in the client
+  docstring + adapter guide describes the AUTH carve-out, not a 4xx carve-out.
 - **DB driver version-support policy** for prototype patching (`pg`, `mysql2`,
   `mongodb`, redis client) — blocks Phase 5 DB blocking success criteria.
 - **Redaction default — RESOLVED (Phase 5 Tier A1):** credential HTTP headers
