@@ -22,7 +22,6 @@
  * BLOCK/HALT throws and the real fs call is provably never reached.
  */
 
-import { randomBytes } from "node:crypto";
 import type * as NodeFsModule from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import type * as NodeFsPromisesModule from "node:fs/promises";
@@ -30,33 +29,7 @@ import type * as NodeFsPromisesModule from "node:fs/promises";
 import type { ClientLogger } from "../client/index.js";
 import type { OpenBoxRuntime } from "../runtime/openbox-runtime.js";
 import { buildCompletedFileSpan, buildStartedFileSpan } from "../spans/file-span-builder.js";
-
-function mintSpanId(): string {
-  return randomBytes(8).toString("hex");
-}
-
-function mintTraceId(): string {
-  return randomBytes(16).toString("hex");
-}
-
-/** Epoch nanoseconds at millisecond resolution — matches the field's documented precision trade-off (contracts/otel-spans.ts). */
-function nowEpochNs(): number {
-  return Date.now() * 1_000_000;
-}
-
-function byteLength(value: unknown): number {
-  if (typeof value === "string") return Buffer.byteLength(value);
-  if (value instanceof Uint8Array) return value.byteLength;
-  return 0;
-}
-
-/** Best-effort human-readable path label for the span; never throws. */
-function resolvePathLabel(candidate: unknown): string {
-  if (typeof candidate === "string") return candidate;
-  if (candidate instanceof URL) return candidate.toString();
-  if (Buffer.isBuffer(candidate)) return candidate.toString();
-  return String(candidate);
-}
+import { byteLength, mintSpanId, mintTraceId, nowEpochNs, resolvePathLabel } from "./file-io-shared.js";
 
 type ReadFileFn = typeof NodeFsPromisesModule.readFile;
 type WriteFileFn = typeof NodeFsPromisesModule.writeFile;

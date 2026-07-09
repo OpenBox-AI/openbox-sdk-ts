@@ -8,16 +8,38 @@ explicit `initOpenBoxInstrumentation({ runtime, databases: [...] })` call — ne
 on import.
 
 > **Security note:** treat this table as the source of truth for what a BLOCK
-> verdict actually stops. Any call form marked "pass-through" is telemetry-blind
-> AND unblockable — do not rely on governance for it.
+> verdict actually stops. Any call form marked "pass-through" is unblockable — do
+> not rely on governance to stop it. Most pass-through forms are also
+> telemetry-blind; the one exception is sync `fs` (`readFileSync`/`writeFileSync`/
+> `mkdirSync`), which is telemetry-**visible** (emits a completed hook) yet still
+> unblockable — see the fs (sync) note below.
 
 ## Tier A1 (always available)
 
 | Target | Governed (BLOCK stops it) | Pass-through (NOT blocked) |
 |---|---|---|
 | **fetch** | global `fetch(...)` | requests to the configured Core origin + SDK-internal calls (recursion guard, by design) |
-| **fs.promises** | `readFile` / `writeFile` | `createReadStream`/`createWriteStream` + sync `fs.*` (streaming/sync are telemetry-only) |
+| **fs.promises** | `readFile` / `writeFile` (preflight-blockable) | `createReadStream`/`createWriteStream` (streaming is telemetry-only) |
+| **fs (sync)** | — telemetry-only, never preflight-blocks (see note below) | `readFileSync`/`writeFileSync`/`mkdirSync` always run before the hook; `appendFileSync`/`openSync`/`rmSync`/`unlinkSync`/fds/streams/watchers uninstrumented |
 | **functions** | anything wrapped in `traced(fn)` | un-wrapped functions |
+
+### fs (sync): completed-hook telemetry only, never preflight-blocked
+
+`readFileSync`, `writeFileSync`, and `mkdirSync` are instrumented under the same
+`instrumentation.fileEnabled` master toggle as `fs.promises`, but they are
+**telemetry-only**. A synchronous Node API cannot `await` the async runtime
+before touching the file system, so the wrapper runs the real op FIRST, then
+fires a **completed** hook for correlated audit telemetry and post-operation
+governance signals — it never sends a started/preflight hook and cannot stop the
+op. A BLOCK/HALT on the completed hook marks the activity stopped for FUTURE work
+but cannot undo an fs op that already ran; `onApiError: "fail_closed"` cannot make
+sync fs preflight-block either. `mkdirSync` is recorded as a destructive
+`file.write` (`file_operation: "write"`, `file_mode: "w"`) — there is no
+`file.mkdir` semantic. Use `fs.promises.readFile`/`writeFile` when you need
+pre-operation blocking. Because the sync wrapper returns before its telemetry
+settles, `await` the controller's `flush()` (or a middleware `close()` that calls
+it) so the last fs event is not dropped. `instrumentation.fileEnabled: false`
+disables BOTH the async and sync file hooks.
 
 ## Tier A2/B (opt-in via `databases`)
 

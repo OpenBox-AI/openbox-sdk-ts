@@ -1,17 +1,40 @@
 /**
- * `file_operation` family span assembly for the `fs.promises` governance
- * wrapper. Pure data-assembly — see `http-span-builder.ts` for the module
- * pattern this mirrors.
+ * `file_operation` family span assembly for the `fs.promises` (async) and
+ * `node:fs` sync governance wrappers. Pure data-assembly — see
+ * `http-span-builder.ts` for the module pattern this mirrors.
  *
  * No body/content field exists on the file family matrix
  * (`ROOT_FIELDS_BY_HOOK_TYPE.file_operation` — see `contracts/otel-spans.ts`):
  * only path/mode/operation and byte/line COUNTS. There is therefore nothing
  * here to redact or truncate — file spans never carry raw file content.
+ *
+ * File identity is mirrored in BOTH the flat Core root fields (`file_path`/
+ * `file_mode`/`file_operation`) AND the OTel-native `attributes` sub-object
+ * (`file.path`/`file.mode`/`file.operation`). Core and sibling SDKs read the
+ * root fields; downstream OTel-style consumers read `attributes`. This is the
+ * one hook family that populates `attributes` at build time — http/function
+ * spans leave it for `toCoreSpanData` to default to `{}` — because file
+ * governance has no OTel span source to hydrate it from later.
  */
 
+import type { JsonValue } from "../contracts/results.js";
 import { HookType, SEMANTIC_FIELDS_BY_HOOK_TYPE, type SpanRecord } from "../contracts/otel-spans.js";
 
 export type FileOperationKind = "read" | "write";
+
+/** `r` for reads, `w` for (destructive) writes — mirrors the root `file_mode` field. */
+function fileMode(operation: FileOperationKind): "r" | "w" {
+  return operation === "read" ? "r" : "w";
+}
+
+/** OTel-native attribute bag mirroring the flat file root fields. Never carries content. */
+function fileAttributes(filePath: string, operation: FileOperationKind): Record<string, JsonValue> {
+  return {
+    "file.path": filePath,
+    "file.mode": fileMode(operation),
+    "file.operation": operation
+  };
+}
 
 export interface FileSpanIdentity {
   readonly spanId: string;
@@ -37,8 +60,9 @@ export function buildStartedFileSpan(input: BuildStartedFileSpanInput): SpanReco
     kind: "INTERNAL",
     start_time: input.startTimeNs,
     file_path: input.filePath,
-    file_mode: input.operation === "read" ? "r" : "w",
+    file_mode: fileMode(input.operation),
     file_operation: input.operation,
+    attributes: fileAttributes(input.filePath, input.operation),
     attribute_key_identifiers: [...SEMANTIC_FIELDS_BY_HOOK_TYPE[HookType.FILE_OPERATION]!]
   };
 }
@@ -68,11 +92,12 @@ export function buildCompletedFileSpan(input: BuildCompletedFileSpanInput): Span
     end_time: input.endTimeNs,
     duration_ns: input.durationNs,
     file_path: input.filePath,
-    file_mode: input.operation === "read" ? "r" : "w",
+    file_mode: fileMode(input.operation),
     file_operation: input.operation,
     bytes_read: input.bytesRead ?? null,
     bytes_written: input.bytesWritten ?? null,
     error: input.error ?? null,
+    attributes: fileAttributes(input.filePath, input.operation),
     attribute_key_identifiers: [...SEMANTIC_FIELDS_BY_HOOK_TYPE[HookType.FILE_OPERATION]!]
   };
 }

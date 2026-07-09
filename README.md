@@ -89,9 +89,12 @@ reintroduce at the wrapper layer.
 ### Opt-in Node instrumentation
 
 `initOpenBoxInstrumentation` installs governance patches for `fetch`,
-`fs.promises`, `traced()`-wrapped functions, and (opt-in per driver) `pg`,
-`redis`, `mysql2`, `mongodb`. Nothing is patched on import — only inside this
-call, and only for drivers you name:
+`fs.promises` (async, preflight-blockable), sync `fs` (`readFileSync`/
+`writeFileSync`/`mkdirSync`, completed-hook telemetry only — see the coverage
+doc), `traced()`-wrapped functions, and (opt-in per driver) `pg`, `redis`,
+`mysql2`, `mongodb`. `instrumentation.fileEnabled` toggles both the async and
+sync file hooks together. Nothing is patched on import — only inside this call,
+and only for drivers you name:
 
 ```ts
 import { initOpenBoxInstrumentation } from "@openbox-ai/openbox-sdk/instrumentation";
@@ -101,7 +104,9 @@ const instrumentation = initOpenBoxInstrumentation({
   databases: ["pg"] // explicit opt-in — never auto-detected
 });
 
-// later, on shutdown
+// later, on shutdown — await flush() first so the last sync-fs completed-hook
+// telemetry (which the sync wrapper fires after returning) is not dropped.
+await instrumentation.flush();
 instrumentation.shutdown();
 ```
 

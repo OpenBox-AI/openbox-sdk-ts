@@ -1,11 +1,14 @@
 /**
  * `initOpenBoxInstrumentation(options)` — Tier A1 composition root.
  *
- * Installs the fetch + fs.promises governance patches and activates
+ * Installs the fetch + fs.promises + fs.sync governance patches and activates
  * `traced()` for ONE bound `OpenBoxRuntime`, per the Phase 4 per-runtime
  * invariant applied to this phase's process-global patch surface: fetch is a
- * process global and `fs.promises` is a single shared module object, so at
- * most one runtime can govern them at a time. Root-import-free by
+ * process global and both `fs.promises` and the sync `node:fs` methods are
+ * single shared module objects, so at most one runtime can govern them at a
+ * time. `fs.promises` is preflight-enforced; sync fs is completed-hook
+ * telemetry only (a sync Node API cannot await the async runtime before the op
+ * runs — see `file-io-sync-wrapper.ts`). Root-import-free by
  * construction — nothing in this module (or anything it imports) runs at
  * import time; every side effect happens inside `initOpenBoxInstrumentation`
  * itself, and this module is never re-exported from the package root
@@ -44,8 +47,8 @@
  * that target rather than silently doing nothing; `options.strict` upgrades
  * that diagnostic to a thrown `OpenBoxInstrumentationError` instead. Tier A1
  * has no per-instance "driver client created before init" failure mode (fetch
- * is a global, fs.promises is a shared module object — both are patched fresh
- * on every `init()` regardless of when other code imported them); that
+ * is a global, fs.promises and sync fs are shared module objects — all patched
+ * fresh on every `init()` regardless of when other code imported them); that
  * failure mode is inherent to per-instance prototype patches (`pg.Client`,
  * `mysql.Connection`, ...) and is a Tier A2/B concern. `assertPatchable`
  * below is written generically so those tiers can reuse it unchanged.
@@ -59,6 +62,7 @@ import {
   type FetchHttpGovernancePatchHandle
 } from "./fetch-http-governance-patch.js";
 import { installFileIoPromisesWrapper, type FileIoPromisesWrapperHandle } from "./file-io-promises-wrapper.js";
+import { installFileIoSyncWrapper, type FileIoSyncWrapperHandle } from "./file-io-sync-wrapper.js";
 import { setTracedGovernanceRuntime } from "./function-wrapper-traced.js";
 import {
   installMongodbCollectionCrudWrapper,
@@ -99,10 +103,23 @@ export interface InitOpenBoxInstrumentationOptions {
 }
 
 export interface OpenBoxInstrumentationController {
-  /** Targets successfully patched this call, e.g. `["fetch", "fs.promises", "function", "pg", "redis", "mysql2", "mongodb"]`. */
+  /** Targets successfully patched this call, e.g. `["fetch", "fs.promises", "fs.sync", "function", "pg", "redis", "mysql2", "mongodb"]`. */
   readonly installedTargets: readonly string[];
   /** Governed HTTP requests observed with no bound ActivityContext. 0 when HTTP governance was not installed. */
   getSpanlessGovernedHttpRequestCount(): number;
+  /**
+   * Await the sync-fs wrapper's in-flight completed-telemetry promises to
+   * settle. The sync fs wrapper returns before its telemetry finishes (see
+   * `file-io-sync-wrapper.ts`), so a caller that is about to tear down (e.g.
+   * `await openbox.close()`) should `await flush()` first to avoid dropping the
+   * last fs event. Non-breaking, idempotent, and safe when sync fs was never
+   * installed (resolves immediately). Never throws for telemetry failures.
+   *
+   * Durability is bounded by the Core client's `timeoutSeconds` (default 30s):
+   * each pending `runtime.completed(...)` settles by send or client timeout, so
+   * `flush()` cannot hang longer than that per in-flight event.
+   */
+  flush(): Promise<void>;
   /** Restore every patched target. Idempotent and concurrency-safe (see module docstring). */
   shutdown(): void;
 }
@@ -152,7 +169,7 @@ export function initOpenBoxInstrumentation(
     }
     throw new OpenBoxInstrumentationError(
       "initOpenBoxInstrumentation is already active for a different OpenBoxRuntime instance — " +
-        "fetch/fs.promises are process-wide singular targets, so only one runtime can govern them " +
+        "fetch/fs.promises/fs.sync are process-wide singular targets, so only one runtime can govern them " +
         "at a time. Call shutdown() on the existing controller before initializing a new one."
     );
   }
@@ -161,6 +178,7 @@ export function initOpenBoxInstrumentation(
   const installedTargets: string[] = [];
   let fetchHandle: FetchHttpGovernancePatchHandle | null = null;
   let fileHandle: FileIoPromisesWrapperHandle | null = null;
+  let fileSyncHandle: FileIoSyncWrapperHandle | null = null;
   let functionInstalled = false;
   let pgHandle: PostgresClientQueryWrapperHandle | null = null;
   let redisHandle: RedisCommandWrapperHandle | null = null;
@@ -175,6 +193,7 @@ export function initOpenBoxInstrumentation(
   function restoreInstalledSoFar(): void {
     fetchHandle?.restore();
     fileHandle?.restore();
+    fileSyncHandle?.restore();
     if (functionInstalled) setTracedGovernanceRuntime(null);
     pgHandle?.restore();
     redisHandle?.restore();
@@ -201,7 +220,11 @@ export function initOpenBoxInstrumentation(
       }
 
       if (instrumentation.fileEnabled) {
-        const installed = assertPatchable(
+        // `fs.promises` (async, preflight-enforced) and `fs.sync` (telemetry-only)
+        // are independent patch targets under the one `fileEnabled` master
+        // toggle. Each fails loud on its OWN target name, so a strict rollback
+        // or a non-strict diagnostic points at the exact surface that failed.
+        const promisesInstalled = assertPatchable(
           () => {
             fileHandle = installFileIoPromisesWrapper({ runtime, logger });
           },
@@ -209,9 +232,19 @@ export function initOpenBoxInstrumentation(
           strict,
           logger
         );
-        if (installed) installedTargets.push("fs.promises");
+        if (promisesInstalled) installedTargets.push("fs.promises");
+
+        const syncInstalled = assertPatchable(
+          () => {
+            fileSyncHandle = installFileIoSyncWrapper({ runtime, logger });
+          },
+          "fs.sync",
+          strict,
+          logger
+        );
+        if (syncInstalled) installedTargets.push("fs.sync");
       } else {
-        logger.info("File (fs.promises) instrumentation disabled by config (instrumentation.fileEnabled=false)");
+        logger.info("File (fs.promises + fs.sync) instrumentation disabled by config (instrumentation.fileEnabled=false)");
       }
 
       if (instrumentation.functionEnabled) {
@@ -291,6 +324,10 @@ export function initOpenBoxInstrumentation(
     installedTargets,
     getSpanlessGovernedHttpRequestCount(): number {
       return fetchHandle?.getSpanlessGovernedRequestCount() ?? 0;
+    },
+    flush(): Promise<void> {
+      // Resolves immediately when sync fs was never installed.
+      return fileSyncHandle?.flush() ?? Promise.resolve();
     },
     shutdown(): void {
       // Idempotency-flag-guarded and fully synchronous — see module docstring
