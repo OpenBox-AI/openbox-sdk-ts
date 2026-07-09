@@ -5,6 +5,27 @@ All notable changes to `@openbox-ai/openbox-sdk` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-07-09
+
+### Fixed
+
+- **Approval polling used the wrong IDs.** `FrameworkAdapter.handleApproval`
+  read `workflow_id`/`run_id`/`activity_id` from `result.raw`, but Core's
+  evaluate response never echoes them, so a configured `ApprovalPoller` polled
+  `POST /api/v1/governance/approval` with empty IDs. The originating context is
+  now threaded into the approval seam: `handleApproval(result, context?)`
+  accepts an optional `ActivityContext` (lifecycle events build one from the
+  event; hook evaluations pass the bound context) and prefers it, with
+  `result.raw` kept only as a backward-compatible fallback. Existing adapters
+  implementing `handleApproval(result)` keep working (the extra param is optional).
+
+### Documented
+
+- **Non-auth 4xx follows `on_api_error` (fail-open by default).** A review
+  flagged that non-401/403 `4xx` evaluate responses fail open under the default
+  policy; this is intentional (availability) and now recorded in
+  `docs/contract-conflict-ledger.md`. Only auth `401/403` hard-fails regardless.
+
 ## [0.1.0] - 2026-07-09
 
 Initial release. `@openbox-ai/openbox-sdk` is the TypeScript **base SDK** for
