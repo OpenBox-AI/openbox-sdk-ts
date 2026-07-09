@@ -17,3 +17,4 @@ Entry point for `openbox-sdk-ts` project notes. One line per note.
 
 - [decision-signing-parity-and-fail-closed-auth](decision-signing-parity-and-fail-closed-auth.md) — the two sticky Phase 2 decisions: ASCII-escape + PKCS8-DER signing byte-parity, and evaluate() failing CLOSED on auth 401/403 (intentional divergence from Python's fail-open).
 - [decision-fail-open-on-non-auth-4xx](decision-fail-open-on-non-auth-4xx.md) — non-auth 4xx (400/404/422) follows on_api_error and fails OPEN under default; kept intentionally (availability), documented so it's not re-flagged.
+- [decision-sync-fs-telemetry-only](decision-sync-fs-telemetry-only.md) — sync node:fs (readFileSync/writeFileSync/mkdirSync) is telemetry-only (can't preflight-block); drain-on-close via flush(); hot-path guard; and the LangChain-consumes-base-`dist/` rebuild coupling.
