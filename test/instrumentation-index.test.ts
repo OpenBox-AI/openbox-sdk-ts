@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type * as NodeFsModule from "node:fs";
 import type * as NodeFsPromisesModule from "node:fs/promises";
+import type * as NodeHttpModule from "node:http";
+import type * as NodeHttpsModule from "node:https";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -51,6 +53,16 @@ function pgCjs(): typeof PgModule {
   return require("pg") as typeof PgModule;
 }
 
+function httpCjs(): typeof NodeHttpModule {
+  const require = createRequire(import.meta.url);
+  return require("node:http") as typeof NodeHttpModule;
+}
+
+function httpsCjs(): typeof NodeHttpsModule {
+  const require = createRequire(import.meta.url);
+  return require("node:https") as typeof NodeHttpsModule;
+}
+
 let realFetch: typeof fetch;
 let controller: OpenBoxInstrumentationController | null = null;
 
@@ -74,7 +86,7 @@ describe("initOpenBoxInstrumentation — installs Tier A1 targets by default", (
     const runtime = buildRuntime(fakeCore);
     controller = mod.initOpenBoxInstrumentation({ runtime, logger: silentLogger });
 
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function"]);
     expect(globalThis.fetch).not.toBe(before);
   });
 
@@ -97,13 +109,19 @@ describe("initOpenBoxInstrumentation — config toggles", () => {
     expect(controller.getSpanlessGovernedHttpRequestCount()).toBe(0); // no fetch handle installed at all
   });
 
-  it("httpEnabled=false skips fetch but still installs fs.promises/fs.sync/function", () => {
+  it("httpEnabled=false skips ALL HTTP targets (fetch + node:http + node:https) but keeps fs/function", () => {
+    const http = httpCjs();
+    const https = httpsCjs();
+    const beforeFetch = globalThis.fetch;
+    const beforeHttpRequest = http.request;
+    const beforeHttpsRequest = https.request;
     const fakeCore = new FakeCore();
     const runtime = buildRuntime(fakeCore, { httpEnabled: false });
-    const before = globalThis.fetch;
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
     expect(controller.installedTargets).toStrictEqual(["fs.promises", "fs.sync", "function"]);
-    expect(globalThis.fetch).toBe(before);
+    expect(globalThis.fetch).toBe(beforeFetch);
+    expect(http.request).toBe(beforeHttpRequest);
+    expect(https.request).toBe(beforeHttpsRequest);
   });
 
   it("fileEnabled=false skips BOTH fs.promises and fs.sync but still installs fetch/function", () => {
@@ -115,7 +133,7 @@ describe("initOpenBoxInstrumentation — config toggles", () => {
     const fakeCore = new FakeCore();
     const runtime = buildRuntime(fakeCore, { fileEnabled: false });
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "function"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "function"]);
     expect(fsp.readFile).toBe(beforeRead); // async file target untouched
     expect(fs.readFileSync).toBe(beforeReadSync); // sync file target untouched
     expect(fs.mkdirSync).toBe(beforeMkdirSync);
@@ -125,7 +143,7 @@ describe("initOpenBoxInstrumentation — config toggles", () => {
     const fakeCore = new FakeCore();
     const runtime = buildRuntime(fakeCore, { functionEnabled: false });
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync"]);
 
     let calls = 0;
     const fn = traced(async () => {
@@ -192,7 +210,56 @@ describe("initOpenBoxInstrumentation — idempotency / concurrency-safety / sing
 
     const runtimeB = buildRuntime(new FakeCore());
     controller = initOpenBoxInstrumentation({ runtime: runtimeB, logger: silentLogger });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function"]);
+  });
+});
+
+describe("initOpenBoxInstrumentation — node:http / node:https targets", () => {
+  it("default install swaps node:http and node:https request/get; shutdown restores them", () => {
+    const http = httpCjs();
+    const https = httpsCjs();
+    const beforeHttpRequest = http.request;
+    const beforeHttpGet = http.get;
+    const beforeHttpsRequest = https.request;
+    const beforeHttpsGet = https.get;
+    const fakeCore = new FakeCore();
+    const runtime = buildRuntime(fakeCore);
+
+    const c = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
+    expect(http.request).not.toBe(beforeHttpRequest);
+    expect(http.get).not.toBe(beforeHttpGet);
+    expect(https.request).not.toBe(beforeHttpsRequest);
+    expect(https.get).not.toBe(beforeHttpsGet);
+
+    c.shutdown();
+    expect(http.request).toBe(beforeHttpRequest);
+    expect(http.get).toBe(beforeHttpGet);
+    expect(https.request).toBe(beforeHttpsRequest);
+    expect(https.get).toBe(beforeHttpsGet);
+  });
+
+  it("strict: an unpatchable node:https rolls back fetch + node:http installed before it", () => {
+    const http = httpCjs();
+    const https = httpsCjs();
+    const originalHttpsRequest = https.request;
+    const beforeFetch = globalThis.fetch;
+    const beforeHttpRequest = http.request;
+    // @ts-expect-error -- intentionally breaking ONLY the node:https target for this one test
+    https.request = undefined;
+
+    try {
+      const fakeCore = new FakeCore();
+      const runtime = buildRuntime(fakeCore);
+      expect(() => initOpenBoxInstrumentation({ runtime, strict: true, logger: silentLogger })).toThrow(
+        OpenBoxInstrumentationError
+      );
+      // fetch AND node:http installed BEFORE node:https failed; strict rolls them
+      // ALL back — never a half-patched process with no controller to undo it.
+      expect(globalThis.fetch).toBe(beforeFetch);
+      expect(http.request).toBe(beforeHttpRequest);
+    } finally {
+      https.request = originalHttpsRequest;
+    }
   });
 });
 
@@ -210,7 +277,7 @@ describe("initOpenBoxInstrumentation — fail-loud (Decision 17)", () => {
       const runtime = buildRuntime(fakeCore);
       controller = initOpenBoxInstrumentation({ runtime, logger });
       // fs.promises excluded, but the independent fs.sync target still installs.
-      expect(controller.installedTargets).toStrictEqual(["fetch", "fs.sync", "function"]);
+      expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.sync", "function"]);
       expect(errors.some((m) => m.includes("fs.promises"))).toBe(true);
       expect(errors.some((m) => m.includes("fs.sync"))).toBe(false); // sync succeeded
     } finally {
@@ -231,7 +298,7 @@ describe("initOpenBoxInstrumentation — fail-loud (Decision 17)", () => {
       const runtime = buildRuntime(fakeCore);
       controller = initOpenBoxInstrumentation({ runtime, logger });
       // fs.sync excluded, but the independent fs.promises target still installs.
-      expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "function"]);
+      expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "function"]);
       expect(errors.some((m) => m.includes("fs.sync"))).toBe(true);
     } finally {
       fs.mkdirSync = originalMkdirSync;
@@ -315,7 +382,7 @@ describe("initOpenBoxInstrumentation — DB driver opt-in (Tier A2/B, explicit, 
     const runtime = buildRuntime(fakeCore);
 
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function"]);
     expect(pg.Client.prototype.query).toBe(beforeQuery); // untouched — no driver was requested
   });
 
@@ -326,7 +393,7 @@ describe("initOpenBoxInstrumentation — DB driver opt-in (Tier A2/B, explicit, 
     const runtime = buildRuntime(fakeCore);
 
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger, databases: ["pg"] });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function", "pg"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function", "pg"]);
     expect(pg.Client.prototype.query).not.toBe(beforeQuery);
 
     controller.shutdown();
@@ -340,7 +407,7 @@ describe("initOpenBoxInstrumentation — DB driver opt-in (Tier A2/B, explicit, 
     const runtime = buildRuntime(fakeCore, { dbEnabled: false });
 
     controller = initOpenBoxInstrumentation({ runtime, logger: silentLogger, databases: ["pg"] });
-    expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function"]);
+    expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function"]);
     expect(pg.Client.prototype.query).toBe(beforeQuery);
   });
 
@@ -371,7 +438,7 @@ describe("initOpenBoxInstrumentation — DB driver opt-in (Tier A2/B, explicit, 
       const fakeCore = new FakeCore();
       const runtime = buildRuntime(fakeCore);
       controller = initOpenBoxInstrumentation({ runtime, logger, databases: ["pg"] });
-      expect(controller.installedTargets).toStrictEqual(["fetch", "fs.promises", "fs.sync", "function"]); // pg excluded
+      expect(controller.installedTargets).toStrictEqual(["fetch", "http", "https", "fs.promises", "fs.sync", "function"]); // pg excluded
       expect(errors.some((m) => m.includes("pg"))).toBe(true);
     } finally {
       pg.Client.prototype.query = originalQuery;

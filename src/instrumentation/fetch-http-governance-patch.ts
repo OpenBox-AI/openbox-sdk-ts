@@ -21,33 +21,17 @@
  * background fetch is never silently invisible.
  */
 
-import { randomBytes } from "node:crypto";
-
 import type { ClientLogger } from "../client/index.js";
 import type { OpenBoxRuntime } from "../runtime/openbox-runtime.js";
 import { buildCompletedHttpSpan, buildStartedHttpSpan } from "../spans/http-span-builder.js";
+import {
+  headersRecordFromFetchHeaders,
+  isTextContentType,
+  mintSpanId,
+  mintTraceId,
+  nowEpochNs
+} from "./http-governance-shared.js";
 import { isInternalCall, isSameOrigin } from "./recursion-guard.js";
-
-function mintSpanId(): string {
-  return randomBytes(8).toString("hex");
-}
-
-function mintTraceId(): string {
-  return randomBytes(16).toString("hex");
-}
-
-/** Epoch nanoseconds at millisecond resolution — matches the field's documented precision trade-off (contracts/otel-spans.ts). */
-function nowEpochNs(): number {
-  return Date.now() * 1_000_000;
-}
-
-const TEXT_CONTENT_MARKERS = ["json", "text", "xml", "javascript", "x-www-form-urlencoded"];
-
-function isTextContentType(contentType: string | null): boolean {
-  if (!contentType) return true; // assume text when unspecified (matches openbox-sdk-python)
-  const lower = contentType.toLowerCase();
-  return TEXT_CONTENT_MARKERS.some((marker) => lower.includes(marker));
-}
 
 /** Exported for direct unit testing of the best-effort failure path — not part of the package's public surface (this module is never re-exported from the package root). */
 export interface Clonable {
@@ -64,14 +48,6 @@ export async function captureBodyText(clonable: Clonable): Promise<string | null
   } catch {
     return null; // best-effort — a body-read failure must never break governance
   }
-}
-
-function headersToRecord(headers: Headers): Record<string, string> {
-  const out: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    out[key] = value;
-  });
-  return out;
 }
 
 export interface FetchHttpGovernancePatchOptions {
@@ -137,7 +113,7 @@ export function installFetchHttpGovernancePatch(
     const spanId = mintSpanId();
     const traceId = mintTraceId();
     const startTimeNs = nowEpochNs();
-    const requestHeaders = headersToRecord(request.headers);
+    const requestHeaders = headersRecordFromFetchHeaders(request.headers);
     const requestBody = await captureBodyText(request);
 
     // BLOCK/HALT throws here — `originalFetch` below is provably never reached.
@@ -182,7 +158,7 @@ export function installFetchHttpGovernancePatch(
     }
 
     const endTimeNs = nowEpochNs();
-    const responseHeaders = headersToRecord(response.headers);
+    const responseHeaders = headersRecordFromFetchHeaders(response.headers);
     const responseBody = await captureBodyText(response);
 
     // Telemetry only — the response is already final; this can never undo it.

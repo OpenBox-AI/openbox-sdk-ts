@@ -19,9 +19,44 @@ on import.
 | Target | Governed (BLOCK stops it) | Pass-through (NOT blocked) |
 |---|---|---|
 | **fetch** | global `fetch(...)` | requests to the configured Core origin + SDK-internal calls (recursion guard, by design) |
+| **node:http / node:https** | `http.request`/`http.get`/`https.request`/`https.get` (deferred-dispatch preflight — the request is never sent on BLOCK) | requests to the Core origin + SDK-internal calls (recursion guard); `CONNECT` tunnels and `upgrade`/websocket handshakes; `node:http2`; direct `net.Socket` writes |
 | **fs.promises** | `readFile` / `writeFile` (preflight-blockable) | `createReadStream`/`createWriteStream` (streaming is telemetry-only) |
 | **fs (sync)** | — telemetry-only, never preflight-blocks (see note below) | `readFileSync`/`writeFileSync`/`mkdirSync` always run before the hook; `appendFileSync`/`openSync`/`rmSync`/`unlinkSync`/fds/streams/watchers uninstrumented |
 | **functions** | anything wrapped in `traced(fn)` | un-wrapped functions |
+
+`fetch`, `node:http`, and `node:https` all share the one
+`instrumentation.httpEnabled` master toggle (the same way `fileEnabled` governs
+both fs targets). Node's `fetch` is undici and does **not** traverse
+`node:http`, so libraries built directly on `node:http`/`node:https` — axios,
+got, node-fetch@2, superagent, aws-sdk v2 — need the separate node:http/https
+patch; the fetch patch alone does not cover them.
+
+### node:http / node:https: deferred-dispatch preflight blocking
+
+`http.request()` must return a `ClientRequest` **synchronously**, so the wrapper
+cannot `await runtime.preflight(...)` in place. Instead it returns a stand-in
+that buffers the request, runs preflight on `.end()`, and only creates the real
+request on ALLOW — so a BLOCK verdict guarantees **no byte reaches the network**
+(unlike sync `fs`, which runs in-thread and can only be telemetry-blocked). This
+is also why a custom-`Agent` `createConnection` hook is NOT used: it would miss
+keep-alive **socket reuse** (a reused socket skips `createConnection`, so a
+blocked request would slip through) and would clobber a caller's own agent/proxy.
+
+- **Buffered body trade-off:** the outbound request body is buffered in memory
+  until the verdict resolves, so backpressure/`'drain'` timing differs from an
+  unwrapped request. Fine for typical governed agent traffic (small bodies).
+- **Body capture:** request + response **text** bodies are captured best-effort
+  and capped at `privacy.maxBodySize`; binary content types are skipped. node:http
+  has no `response.clone()`, so the response body is only captured when the caller
+  consumes it in **flowing** mode synchronously (`res.on('data')`/`res.pipe(...)`
+  in the response handler — the common case). A caller that defers reading, or
+  reads in paused mode (`res.read()`), is left alone (no capture) rather than
+  risk stealing its bytes — the caller's data is never corrupted.
+- **Detached completed hook:** the completed hook fires after the response ends
+  (a socket-event context that, with keep-alive reuse, is not the caller's
+  `activityScope`), so the bound context is captured at request time and re-bound
+  for the completed evaluation, and its promise is drained by `flush()` — `await`
+  the controller's `flush()` before shutdown so the last event is not dropped.
 
 ### fs (sync): completed-hook telemetry only, never preflight-blocked
 

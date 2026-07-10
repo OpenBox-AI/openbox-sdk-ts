@@ -89,12 +89,15 @@ reintroduce at the wrapper layer.
 ### Opt-in Node instrumentation
 
 `initOpenBoxInstrumentation` installs governance patches for `fetch`,
-`fs.promises` (async, preflight-blockable), sync `fs` (`readFileSync`/
-`writeFileSync`/`mkdirSync`, completed-hook telemetry only — see the coverage
-doc), `traced()`-wrapped functions, and (opt-in per driver) `pg`, `redis`,
-`mysql2`, `mongodb`. `instrumentation.fileEnabled` toggles both the async and
-sync file hooks together. Nothing is patched on import — only inside this call,
-and only for drivers you name:
+`node:http`/`node:https` (preflight-blockable, same as fetch — covers
+axios/got/node-fetch@2/superagent and other `node:http`-based clients that Node's
+undici `fetch` bypasses), `fs.promises` (async, preflight-blockable), sync `fs`
+(`readFileSync`/`writeFileSync`/`mkdirSync`, completed-hook telemetry only — see
+the coverage doc), `traced()`-wrapped functions, and (opt-in per driver) `pg`,
+`redis`, `mysql2`, `mongodb`. `instrumentation.httpEnabled` toggles fetch +
+node:http + node:https together, and `instrumentation.fileEnabled` toggles both
+the async and sync file hooks together. Nothing is patched on import — only
+inside this call, and only for drivers you name:
 
 ```ts
 import { initOpenBoxInstrumentation } from "@openbox-ai/openbox-sdk/instrumentation";
