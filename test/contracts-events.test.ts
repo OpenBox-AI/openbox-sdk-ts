@@ -161,17 +161,22 @@ describe("toPayloadDict", () => {
     expect(body).not.toHaveProperty("span_count");
   });
 
-  it("activityCompleted carries result/error/attempt when present", () => {
+  it("activityCompleted carries result/error/attempt when present — error is the structured object", () => {
     const body = activityCompleted({
       ...WF,
       activityId: "a",
       activityType: "t",
       result: { orderId: "ORD-1" },
-      error: "boom",
+      error: { type: "ToolError", message: "boom", stack_trace: "ToolError: boom\n  at x" },
       attempt: 3
     }).toPayloadDict();
     expect(body["result"]).toStrictEqual({ orderId: "ORD-1" });
-    expect(body["error"]).toBe("boom");
+    expect(body["error"]).toStrictEqual({
+      type: "ToolError",
+      message: "boom",
+      stack_trace: "ToolError: boom\n  at x"
+    });
+    expect(typeof body["error"]).not.toBe("string");
     expect(body["attempt"]).toBe(3);
   });
 
@@ -205,9 +210,25 @@ describe("factory validation", () => {
     expect(() => makeHook({ spans: [] })).toThrow(/spans/);
   });
 
-  it("workflowFailed carries an error message", () => {
-    const body = workflowFailed({ ...WF, error: "boom" }).toPayloadDict();
-    expect(body["error"]).toBe("boom");
+  it("workflowFailed carries the structured error object, serialized unchanged", () => {
+    const error = {
+      type: "ApprovalRejectedError",
+      message: "human said no",
+      stack_trace: "ApprovalRejectedError: human said no\n  at gate",
+      cause: { type: "Error", message: "root cause" },
+      error_type: "governance",
+      non_retryable: true
+    };
+    const body = workflowFailed({ ...WF, error }).toPayloadDict();
+    expect(body["error"]).toStrictEqual(error);
+    expect(typeof body["error"]).not.toBe("string");
+  });
+
+  it("a bare string error is no longer a valid factory input (Core rejects it with 400)", () => {
+    // @ts-expect-error — WorkflowFailedOptions.error is ErrorInfo | null, not string
+    workflowFailed({ ...WF, error: "boom" });
+    // @ts-expect-error — ActivityCompletedOptions.error is ErrorInfo | null, not string
+    activityCompleted({ ...WF, activityId: "a", activityType: "t", error: "boom" });
   });
 });
 

@@ -11,6 +11,7 @@
  */
 
 import { EventEnvelope, EventType } from "./events.js";
+import type { ErrorInfo } from "./error-info.js";
 import type { SpanRecord } from "./otel-spans.js";
 import type { JsonValue } from "./results.js";
 
@@ -64,7 +65,8 @@ export function workflowCompleted(options: WorkflowEventOptions): EventEnvelope 
 }
 
 export interface WorkflowFailedOptions extends WorkflowEventOptions {
-  error?: string | null;
+  /** Structured error object Core requires — a bare string is rejected (400). */
+  error?: ErrorInfo | null;
 }
 
 /** `WorkflowFailed` lifecycle event. */
@@ -109,7 +111,8 @@ export interface ActivityCompletedOptions extends WorkflowEventOptions {
   activityId: string;
   activityType: string;
   result?: JsonValue | null;
-  error?: string | null;
+  /** Structured error object Core requires — a bare string is rejected (400). */
+  error?: ErrorInfo | null;
   attempt?: number | null;
 }
 
