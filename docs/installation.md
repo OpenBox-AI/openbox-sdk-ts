@@ -3,7 +3,7 @@
 ## Install
 
 ```bash
-npm install @openbox-ai/openbox-sdk
+npm install @openbox-ai/openbox-sdk-ts
 ```
 
 Works the same with `pnpm add` / `yarn add` — the package has no install-time
@@ -50,13 +50,13 @@ only `client.sendCommand([...])` is governed, not typed commands like
 
 ## Import-light root
 
-`import "@openbox-ai/openbox-sdk"` (the root/default export) is safe to add to
+`import "@openbox-ai/openbox-sdk-ts"` (the root/default export) is safe to add to
 any module graph: it pulls in only pure contracts and the error hierarchy — no
 `node:crypto`, no `fetch` wrapping, no OpenTelemetry, no database driver, and
 no global side effects. Everything with a side effect (signing, the HTTP
 client, config env resolution, instrumentation, the runtime) lives behind an
-explicit subpath (`@openbox-ai/openbox-sdk/client`,
-`@openbox-ai/openbox-sdk/identity`, ...) — see the
+explicit subpath (`@openbox-ai/openbox-sdk-ts/client`,
+`@openbox-ai/openbox-sdk-ts/identity`, ...) — see the
 [export map in the README](../README.md#public-exports).
 
 This is enforced in CI, not just documented: `npm run import:check` imports

@@ -1,9 +1,40 @@
 # Changelog
 
-All notable changes to `@openbox-ai/openbox-sdk` are documented in this file.
+All notable changes to `@openbox-ai/openbox-sdk-ts` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **Governed `node:http` / `node:https` instrumentation with full preflight
+  blocking.** `initOpenBoxInstrumentation` now patches
+  `http.request`/`http.get`/`https.request`/`https.get` beside `fetch`, closing
+  the gap where libraries built on `node:http` (axios, got, node-fetch@2,
+  superagent) bypassed governance entirely — Node's undici `fetch` does not
+  traverse `node:http`. Because `http.request()` returns synchronously, the patch
+  returns a deferred stand-in `ClientRequest` that buffers the request, runs
+  `runtime.preflight(...)` on `end()`, and creates the real request only on ALLOW,
+  so a BLOCK/HALT verdict stops the request **before any byte reaches the
+  network** (parity with `fetch`). Request + response text bodies are captured
+  (best-effort, capped at `privacy.maxBodySize`) and credential headers redacted.
+  All three HTTP surfaces share the existing `instrumentation.httpEnabled` toggle
+  (no new config field) and surface as `"http"`/`"https"` in `installedTargets`.
+  The completed hook fires detached (after the response ends), so it is drained by
+  the controller's `flush()` alongside sync-fs telemetry. XHR is out of scope
+  (Node has no `XMLHttpRequest`). See
+  [`docs/instrumentation-coverage.md`](docs/instrumentation-coverage.md) for the
+  blocked-vs-pass-through matrix (`CONNECT`/`upgrade`/`http2` are pass-through).
+
+### Changed
+
+- **Package renamed to `@openbox-ai/openbox-sdk-ts`** (previously
+  `@openbox-ai/openbox-sdk`, last published as `0.1.1`). Update dependencies and
+  imports to the new name; subpath exports are unchanged
+  (`@openbox-ai/openbox-sdk-ts/client`, `.../runtime`, ...). Releases up to
+  `0.1.2` in this changelog shipped under the old name.
 
 ## [0.1.2] - 2026-07-09
 

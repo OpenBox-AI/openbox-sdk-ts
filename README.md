@@ -1,4 +1,4 @@
-# @openbox-ai/openbox-sdk
+# @openbox-ai/openbox-sdk-ts
 
 The OpenBox TypeScript **base SDK** — a contract-driven governance client for
 Node/TS agent frameworks. It signs and sends governance events to OpenBox
@@ -39,7 +39,7 @@ keeps only its own lifecycle mapping (a thin adapter) — see
 ## Install
 
 ```bash
-npm install @openbox-ai/openbox-sdk
+npm install @openbox-ai/openbox-sdk-ts
 ```
 
 Requires Node.js `>=24.10.0`. See [`docs/installation.md`](docs/installation.md)
@@ -58,9 +58,9 @@ BLOCK/HALT, drives approval on REQUIRE_APPROVAL). See
 before wiring `OpenBoxClient` directly in your own code.
 
 ```ts
-import { OpenBoxConfig } from "@openbox-ai/openbox-sdk/config";
-import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk/runtime";
-import { Verdict, workflowStarted } from "@openbox-ai/openbox-sdk";
+import { OpenBoxConfig } from "@openbox-ai/openbox-sdk-ts/config";
+import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
+import { Verdict, workflowStarted } from "@openbox-ai/openbox-sdk-ts";
 
 const config = OpenBoxConfig.resolve({
   apiUrl: "https://core.openbox.ai",
@@ -89,19 +89,27 @@ reintroduce at the wrapper layer.
 ### Opt-in Node instrumentation
 
 `initOpenBoxInstrumentation` installs governance patches for `fetch`,
-`fs.promises`, `traced()`-wrapped functions, and (opt-in per driver) `pg`,
-`redis`, `mysql2`, `mongodb`. Nothing is patched on import — only inside this
-call, and only for drivers you name:
+`node:http`/`node:https` (preflight-blockable, same as fetch — covers
+axios/got/node-fetch@2/superagent and other `node:http`-based clients that Node's
+undici `fetch` bypasses), `fs.promises` (async, preflight-blockable), sync `fs`
+(`readFileSync`/`writeFileSync`/`mkdirSync`, completed-hook telemetry only — see
+the coverage doc), `traced()`-wrapped functions, and (opt-in per driver) `pg`,
+`redis`, `mysql2`, `mongodb`. `instrumentation.httpEnabled` toggles fetch +
+node:http + node:https together, and `instrumentation.fileEnabled` toggles both
+the async and sync file hooks together. Nothing is patched on import — only
+inside this call, and only for drivers you name:
 
 ```ts
-import { initOpenBoxInstrumentation } from "@openbox-ai/openbox-sdk/instrumentation";
+import { initOpenBoxInstrumentation } from "@openbox-ai/openbox-sdk-ts/instrumentation";
 
 const instrumentation = initOpenBoxInstrumentation({
   runtime,
   databases: ["pg"] // explicit opt-in — never auto-detected
 });
 
-// later, on shutdown
+// later, on shutdown — await flush() first so the last sync-fs completed-hook
+// telemetry (which the sync wrapper fires after returning) is not dropped.
+await instrumentation.flush();
 instrumentation.shutdown();
 ```
 
@@ -113,22 +121,22 @@ exactly what each target blocks vs. passes through unblocked (the `redis` and
 
 The package root is intentionally **import-light**: it re-exports only pure
 contracts and errors (no crypto, network, or OpenTelemetry), so
-`import "@openbox-ai/openbox-sdk"` has zero side effects. Everything else is a
+`import "@openbox-ai/openbox-sdk-ts"` has zero side effects. Everything else is a
 subpath, added as real consumers need it.
 
 | Import | Contents |
 |---|---|
-| `@openbox-ai/openbox-sdk` | `SDK_VERSION`; `Verdict` + verdict helpers; `EvaluationResult`/`ApprovalResult`/`GuardrailsResult`; `EventEnvelope`/`EventType` + event factories (`workflowStarted`, `activityStarted`, `hook`, `handoff`, ...); span field matrices + diagnostics; `ActivityContext`; the full error hierarchy; strict gate helpers (`prepareLifecyclePayload`, `prepareHookPayload`, ...) |
-| `@openbox-ai/openbox-sdk/adapters` | `FrameworkAdapter` interface + the default `CoreAdapter` |
-| `@openbox-ai/openbox-sdk/approvals` | `ApprovalPoller` — HITL poll-loop orchestration |
-| `@openbox-ai/openbox-sdk/client` | `OpenBoxClient` — the governance HTTP client (`evaluate`/`pollApproval`/`validateApiKey`) |
-| `@openbox-ai/openbox-sdk/config` | `OpenBoxConfig` — layered env resolution + validation |
-| `@openbox-ai/openbox-sdk/conformance` | `FakeCore`/`FakeAdapter`, scenario matrices, wire-shape assertions (test utility, not a frozen API) |
-| `@openbox-ai/openbox-sdk/context` | `ContextStore` — per-runtime `AsyncLocalStorage` activity binding |
-| `@openbox-ai/openbox-sdk/identity` | `AgentIdentity` + Ed25519 signing primitives |
-| `@openbox-ai/openbox-sdk/instrumentation` | `initOpenBoxInstrumentation`, `traced()`, recursion-guard helpers |
-| `@openbox-ai/openbox-sdk/runtime` | `OpenBoxRuntime` composition root + `HookEvaluator` |
-| `@openbox-ai/openbox-sdk/package.json` | Raw package metadata (for tooling) |
+| `@openbox-ai/openbox-sdk-ts` | `SDK_VERSION`; `Verdict` + verdict helpers; `EvaluationResult`/`ApprovalResult`/`GuardrailsResult`; `EventEnvelope`/`EventType` + event factories (`workflowStarted`, `activityStarted`, `hook`, `handoff`, ...); span field matrices + diagnostics; `ActivityContext`; the full error hierarchy; strict gate helpers (`prepareLifecyclePayload`, `prepareHookPayload`, ...) |
+| `@openbox-ai/openbox-sdk-ts/adapters` | `FrameworkAdapter` interface + the default `CoreAdapter` |
+| `@openbox-ai/openbox-sdk-ts/approvals` | `ApprovalPoller` — HITL poll-loop orchestration |
+| `@openbox-ai/openbox-sdk-ts/client` | `OpenBoxClient` — the governance HTTP client (`evaluate`/`pollApproval`/`validateApiKey`) |
+| `@openbox-ai/openbox-sdk-ts/config` | `OpenBoxConfig` — layered env resolution + validation |
+| `@openbox-ai/openbox-sdk-ts/conformance` | `FakeCore`/`FakeAdapter`, scenario matrices, wire-shape assertions (test utility, not a frozen API) |
+| `@openbox-ai/openbox-sdk-ts/context` | `ContextStore` — per-runtime `AsyncLocalStorage` activity binding |
+| `@openbox-ai/openbox-sdk-ts/identity` | `AgentIdentity` + Ed25519 signing primitives |
+| `@openbox-ai/openbox-sdk-ts/instrumentation` | `initOpenBoxInstrumentation`, `traced()`, recursion-guard helpers |
+| `@openbox-ai/openbox-sdk-ts/runtime` | `OpenBoxRuntime` composition root + `HookEvaluator` |
+| `@openbox-ai/openbox-sdk-ts/package.json` | Raw package metadata (for tooling) |
 
 ## Documentation
 

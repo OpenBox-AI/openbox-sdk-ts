@@ -1,0 +1,14 @@
+title = "openbox-sdk-ts gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated artifacts, lockfiles, and placeholder values that are not real secrets"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)coverage/''',
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)\.env\.example$''',
+]

@@ -1,7 +1,7 @@
 # Adapter Checklist For Future TS SDKs
 
 A checklist for anyone building a **new** TypeScript SDK on top of
-`@openbox-ai/openbox-sdk` (CopilotKit, a Cloudflare/edge adapter, a
+`@openbox-ai/openbox-sdk-ts` (CopilotKit, a Cloudflare/edge adapter, a
 LangChain-TS SDK, or anything else). These are the hard-won lessons from
 building this base SDK and its first adapter — skipping any of them risks
 reproducing a bug that has already been found and fixed once.

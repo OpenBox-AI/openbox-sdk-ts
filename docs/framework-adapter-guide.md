@@ -1,7 +1,7 @@
 # Framework Adapter Guide
 
 How to build a framework adapter (Mastra-style, or your own) on top of
-`@openbox-ai/openbox-sdk`. An adapter's job is to map the base SDK's verdicts
+`@openbox-ai/openbox-sdk-ts`. An adapter's job is to map the base SDK's verdicts
 onto your framework's native lifecycle (throwing framework-native errors,
 pausing a workflow, resuming after approval, ...) — it should never
 reimplement signing, validation, or verdict priority itself.
@@ -12,7 +12,7 @@ reimplement signing, validation, or verdict priority itself.
 most important lesson from building the first (Mastra) adapter on this SDK,
 and it is easy to silently reintroduce.
 
-`OpenBoxClient` (`@openbox-ai/openbox-sdk/client`) already does the right
+`OpenBoxClient` (`@openbox-ai/openbox-sdk-ts/client`) already does the right
 thing: an auth/signing rejection (HTTP 401/403) THROWS
 (`OpenBoxAuthError`/`OpenBoxSigningError`) — it never fails open into an
 ALLOW, regardless of the configured `onApiError` policy. Network/outage
@@ -53,7 +53,7 @@ open **only** for a genuine network/outage error:
 - May fail open under `onApiError: "fail_open"` — `OpenBoxNetworkError` only.
 
 ```ts
-import { ContractError, GovernanceAPIError, OpenBoxAuthError } from "@openbox-ai/openbox-sdk";
+import { ContractError, GovernanceAPIError, OpenBoxAuthError } from "@openbox-ai/openbox-sdk-ts";
 
 function isFailClosedCondition(error: unknown): boolean {
   return (
@@ -85,19 +85,19 @@ not a theoretical one.
 1. **Resolve config once.**
 
    ```ts
-   import { OpenBoxConfig } from "@openbox-ai/openbox-sdk/config";
+   import { OpenBoxConfig } from "@openbox-ai/openbox-sdk-ts/config";
 
    // Resolves MYFRAMEWORK_API_URL / MYFRAMEWORK_API_KEY (falling back to
    // OPENBOX_API_URL / OPENBOX_API_KEY) from the environment.
    const config = OpenBoxConfig.resolve({ envPrefix: "MYFRAMEWORK" });
    ```
 
-2. **Implement `FrameworkAdapter`** (`@openbox-ai/openbox-sdk/adapters`) — the
+2. **Implement `FrameworkAdapter`** (`@openbox-ai/openbox-sdk-ts/adapters`) — the
    one seam where a verdict becomes a framework-native effect:
 
    ```ts
-   import type { FrameworkAdapter } from "@openbox-ai/openbox-sdk/adapters";
-   import type { EvaluationResult } from "@openbox-ai/openbox-sdk";
+   import type { FrameworkAdapter } from "@openbox-ai/openbox-sdk-ts/adapters";
+   import type { EvaluationResult } from "@openbox-ai/openbox-sdk-ts";
 
    class MyFrameworkAdapter implements FrameworkAdapter {
      readonly name = "my-framework";
@@ -105,7 +105,7 @@ not a theoretical one.
      async handleApproval(result: EvaluationResult): Promise<void> {
        // Drive your framework's HITL UX; resolve on approve, reject/throw on
        // reject or expiry. Called BEFORE the real operation runs. Consider
-       // building this on `ApprovalPoller` (`@openbox-ai/openbox-sdk/approvals`)
+       // building this on `ApprovalPoller` (`@openbox-ai/openbox-sdk-ts/approvals`)
        // rather than hand-rolling a poll loop.
      }
 
@@ -124,7 +124,7 @@ not a theoretical one.
    }
    ```
 
-   Reuse the default `CoreAdapter` (`@openbox-ai/openbox-sdk/adapters`) if you
+   Reuse the default `CoreAdapter` (`@openbox-ai/openbox-sdk-ts/adapters`) if you
    don't need framework-native error types yet — it raises the base
    `GovernanceBlockedError`/`GovernanceHaltError`/`ApprovalRejectedError`
    directly and fails safe (REJECTED, not silently allowed) when no
@@ -133,7 +133,7 @@ not a theoretical one.
 3. **Construct one `OpenBoxRuntime` and drive everything through it.**
 
    ```ts
-   import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk/runtime";
+   import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
 
    const runtime = new OpenBoxRuntime(config, { adapter: new MyFrameworkAdapter() });
    ```
@@ -154,7 +154,7 @@ not a theoretical one.
    trace-id map fallback for detached callbacks):
 
    ```ts
-   import { ActivityContext } from "@openbox-ai/openbox-sdk";
+   import { ActivityContext } from "@openbox-ai/openbox-sdk-ts";
 
    await runtime.contextStore.activityScope(
      new ActivityContext({ workflowId, runId, activityId, activityType }),
