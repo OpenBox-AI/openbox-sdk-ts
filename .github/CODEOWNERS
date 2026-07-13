@@ -1,15 +1,15 @@
 # Default owner for everything not matched below.
-* @ash-krnl
+* @tino-cmd
 
 # Paths release-governance in .github/workflows/release.yml requires
 # CODEOWNERS coverage for. Keep these entries in sync with the
 # `required_patterns` list in that workflow.
-/.github/workflows/ @ash-krnl
-/.github/CODEOWNERS @ash-krnl
-/.gitleaks.toml @ash-krnl
-/CODE_OF_CONDUCT.md @ash-krnl
-/LICENSE @ash-krnl
-/SECURITY.md @ash-krnl
-/package.json @ash-krnl
-/package-lock.json @ash-krnl
-/sonar-project.properties @ash-krnl
+/.github/workflows/ @tino-cmd
+/.github/CODEOWNERS @tino-cmd
+/.gitleaks.toml @tino-cmd
+/CODE_OF_CONDUCT.md @tino-cmd
+/LICENSE @tino-cmd
+/SECURITY.md @tino-cmd
+/package.json @tino-cmd
+/package-lock.json @tino-cmd
+/sonar-project.properties @tino-cmd
