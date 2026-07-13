@@ -137,10 +137,12 @@ export class OpenBoxRuntime {
 
 /**
  * Approval context for a lifecycle event. `workflow_id`/`run_id` live in the
- * flat wire `payload`; `activity_id` is a first-class envelope field (a
- * workflow-level approval legitimately has none). Core's evaluate response
- * omits all three, so the poll must be built from the originating event — see
- * `CoreAdapter.handleApproval`.
+ * flat wire `payload`; `activity_id` is a first-class envelope field. Core's
+ * evaluate response omits all three, so the poll must be built from the
+ * originating event — see `CoreAdapter.handleApproval`. Core's approval poll
+ * is keyed on ALL THREE ids: a workflow-level event (no `activity_id`) that
+ * somehow draws REQUIRE_APPROVAL is unpollable, and the adapter fails safe
+ * (rejects without polling) rather than polling with a partial key.
  */
 function approvalContextFromEvent(event: EventEnvelope): ActivityContext {
   const payload = event.payload;

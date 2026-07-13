@@ -8,6 +8,7 @@ import { ApprovalResult, EvaluationResult, Verdict } from "../src/contracts/resu
 import {
   ApprovalExpiredError,
   ApprovalRejectedError,
+  ApprovalTimeoutError,
   GovernanceBlockedError,
   GovernanceHaltError
 } from "../src/errors/index.js";
@@ -34,6 +35,9 @@ function requireApproval(overrides: Partial<EvaluationResult> = {}): EvaluationR
   return result;
 }
 
+/** Full poll correlation — what the runtime threads in on every real approval. */
+const POLL_CTX = new ActivityContext({ workflowId: "wf-1", runId: "run-1", activityId: "act-1" });
+
 describe("CoreAdapter.name", () => {
   it("is 'core'", () => {
     expect(new CoreAdapter().name).toBe("core");
@@ -54,8 +58,51 @@ describe("CoreAdapter.handleApproval — no poller configured", () => {
   });
 });
 
-describe("CoreAdapter.handleApproval — with a poller configured", () => {
-  it("without an approvalId still fails safe (never drives the poller)", async () => {
+describe("CoreAdapter.handleApproval — approval_id is never required to poll", () => {
+  it("without an approval_id: polls on the correlation IDs and proceeds after ALLOW", async () => {
+    const seen: [string, string, string][] = [];
+    const poller = new ApprovalPoller(idRecordingClient(seen), { pollIntervalMs: 1 });
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    // approvalId stays null — exactly what Core's evaluate response sends today.
+    await expect(adapter.handleApproval(requireApproval(), POLL_CTX)).resolves.toBeUndefined();
+    expect(seen).toStrictEqual([["wf-1", "run-1", "act-1"]]);
+  });
+
+  it("without an approval_id: rejects after a BLOCK decision", async () => {
+    const poller = new ApprovalPoller(
+      fakeClient(() => Promise.resolve(ApprovalResult.fromDict({ action: "block", reason: "human said no" }))),
+      { pollIntervalMs: 1 }
+    );
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    const promise = adapter.handleApproval(requireApproval(), POLL_CTX);
+    await expect(promise).rejects.toBeInstanceOf(ApprovalRejectedError);
+    await expect(promise).rejects.toThrow("human said no");
+  });
+
+  it("without an approval_id: rejects after a HALT decision", async () => {
+    const poller = new ApprovalPoller(
+      fakeClient(() => Promise.resolve(ApprovalResult.fromDict({ action: "halt" }))),
+      { pollIntervalMs: 1 }
+    );
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    await expect(adapter.handleApproval(requireApproval(), POLL_CTX)).rejects.toBeInstanceOf(
+      ApprovalRejectedError
+    );
+  });
+
+  it("an approval_id, when present, is harmless optional metadata (same allow path)", async () => {
+    const seen: [string, string, string][] = [];
+    const poller = new ApprovalPoller(idRecordingClient(seen), { pollIntervalMs: 1 });
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    await expect(
+      adapter.handleApproval(requireApproval({ approvalId: "appr-1" }), POLL_CTX)
+    ).resolves.toBeUndefined();
+    expect(seen).toStrictEqual([["wf-1", "run-1", "act-1"]]);
+  });
+});
+
+describe("CoreAdapter.handleApproval — missing correlation fails safe (never polls)", () => {
+  function countingPoller(): { poller: ApprovalPoller; polls: () => number } {
     let pollCalls = 0;
     const poller = new ApprovalPoller(
       fakeClient(() => {
@@ -64,18 +111,40 @@ describe("CoreAdapter.handleApproval — with a poller configured", () => {
       }),
       { pollIntervalMs: 1 }
     );
+    return { poller, polls: () => pollCalls };
+  }
+
+  it("no context and an empty raw: rejects naming all three IDs, zero polls", async () => {
+    const { poller, polls } = countingPoller();
     const adapter = new CoreAdapter({ approvalPoller: poller });
-    await expect(adapter.handleApproval(requireApproval())).rejects.toBeInstanceOf(ApprovalRejectedError);
-    expect(pollCalls).toBe(0);
+    const promise = adapter.handleApproval(requireApproval());
+    await expect(promise).rejects.toBeInstanceOf(ApprovalRejectedError);
+    await expect(promise).rejects.toThrow(/missing workflowId, runId, activityId/);
+    expect(polls()).toBe(0);
   });
 
+  it.each([
+    ["workflowId", new ActivityContext({ runId: "run-1", activityId: "act-1" })],
+    ["runId", new ActivityContext({ workflowId: "wf-1", activityId: "act-1" })],
+    ["activityId", new ActivityContext({ workflowId: "wf-1", runId: "run-1" })]
+  ] as const)("context missing %s: rejects naming exactly it, zero polls", async (missingKey, context) => {
+    const { poller, polls } = countingPoller();
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    const promise = adapter.handleApproval(requireApproval(), context);
+    await expect(promise).rejects.toBeInstanceOf(ApprovalRejectedError);
+    await expect(promise).rejects.toThrow(new RegExp(`missing ${missingKey}\\)`));
+    expect(polls()).toBe(0);
+  });
+});
+
+describe("CoreAdapter.handleApproval — with a poller configured", () => {
   it("resolves normally on an allow-shaped decision", async () => {
     const poller = new ApprovalPoller(
       fakeClient(() => Promise.resolve(ApprovalResult.fromDict({ action: "allow" }))),
       { pollIntervalMs: 1 }
     );
     const adapter = new CoreAdapter({ approvalPoller: poller });
-    await expect(adapter.handleApproval(requireApproval({ approvalId: "appr-1" }))).resolves.toBeUndefined();
+    await expect(adapter.handleApproval(requireApproval(), POLL_CTX)).resolves.toBeUndefined();
   });
 
   it("throws ApprovalRejectedError on a block decision", async () => {
@@ -84,7 +153,7 @@ describe("CoreAdapter.handleApproval — with a poller configured", () => {
       { pollIntervalMs: 1 }
     );
     const adapter = new CoreAdapter({ approvalPoller: poller });
-    const promise = adapter.handleApproval(requireApproval({ approvalId: "appr-1" }));
+    const promise = adapter.handleApproval(requireApproval(), POLL_CTX);
     await expect(promise).rejects.toBeInstanceOf(ApprovalRejectedError);
     await expect(promise).rejects.toThrow("no");
   });
@@ -95,7 +164,7 @@ describe("CoreAdapter.handleApproval — with a poller configured", () => {
       { pollIntervalMs: 1 }
     );
     const adapter = new CoreAdapter({ approvalPoller: poller });
-    const promise = adapter.handleApproval(requireApproval({ approvalId: "appr-1" }));
+    const promise = adapter.handleApproval(requireApproval(), POLL_CTX);
     await expect(promise).rejects.toBeInstanceOf(ApprovalExpiredError);
     await expect(promise).rejects.toThrow("too late");
   });
@@ -106,8 +175,19 @@ describe("CoreAdapter.handleApproval — with a poller configured", () => {
       { pollIntervalMs: 1 }
     );
     const adapter = new CoreAdapter({ approvalPoller: poller });
-    await expect(adapter.handleApproval(requireApproval({ approvalId: "appr-1" }))).rejects.toThrow(
+    await expect(adapter.handleApproval(requireApproval(), POLL_CTX)).rejects.toThrow(
       /Approval window expired/
+    );
+  });
+
+  it("a pending decision that exhausts the wait budget still times out (ApprovalTimeoutError)", async () => {
+    const poller = new ApprovalPoller(
+      fakeClient(() => Promise.resolve(ApprovalResult.fromDict({ action: "require_approval" }))),
+      { pollIntervalMs: 1, maxWaitMs: 0 }
+    );
+    const adapter = new CoreAdapter({ approvalPoller: poller });
+    await expect(adapter.handleApproval(requireApproval(), POLL_CTX)).rejects.toBeInstanceOf(
+      ApprovalTimeoutError
     );
   });
 

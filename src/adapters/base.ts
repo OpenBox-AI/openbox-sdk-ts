@@ -120,12 +120,23 @@ export class CoreAdapter implements FrameworkAdapter {
   }
 
   async handleApproval(result: EvaluationResult, context?: ActivityContext | null): Promise<void> {
-    if (this.poller === null || !result.approvalId) {
+    if (this.poller === null) {
       throw new ApprovalRejectedError(
         "REQUIRE_APPROVAL verdict but no approval flow is configured — failing safe (operation not run)"
       );
     }
+    // Core's approval endpoint is keyed on (workflow_id, run_id, activity_id) —
+    // `result.approvalId` is optional response metadata and is never required
+    // to poll. Missing correlation is unpollable, so fail safe before any poll.
     const ids = approvalPollIds(result, context);
+    const missing = (["workflowId", "runId", "activityId"] as const).filter((key) => !ids[key]);
+    if (missing.length > 0) {
+      throw new ApprovalRejectedError(
+        `REQUIRE_APPROVAL verdict but approval correlation is incomplete (missing ${missing.join(
+          ", "
+        )}) — failing safe (operation not run)`
+      );
+    }
     const approval = await this.poller.waitForDecision(ids.workflowId, ids.runId, ids.activityId);
     if (approval.allowShaped) return;
     if (approval.expired) {
