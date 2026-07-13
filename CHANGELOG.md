@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@openbox-ai/openbox-sdk` are documented in this file.
+All notable changes to `@openbox-ai/openbox-sdk-ts` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -27,6 +27,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (Node has no `XMLHttpRequest`). See
   [`docs/instrumentation-coverage.md`](docs/instrumentation-coverage.md) for the
   blocked-vs-pass-through matrix (`CONNECT`/`upgrade`/`http2` are pass-through).
+
+### Changed
+
+- **Package renamed to `@openbox-ai/openbox-sdk-ts`** (previously
+  `@openbox-ai/openbox-sdk`, last published as `0.1.1`). Update dependencies and
+  imports to the new name; subpath exports are unchanged
+  (`@openbox-ai/openbox-sdk-ts/client`, `.../runtime`, ...). Releases up to
+  `0.1.2` in this changelog shipped under the old name.
 
 ## [0.1.2] - 2026-07-09
 
