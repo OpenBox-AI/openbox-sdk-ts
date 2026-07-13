@@ -18,6 +18,9 @@ export { SDK_VERSION } from "./version.js";
 // Result contracts (pure — no crypto/network).
 export * from "./contracts/results.js";
 
+// Structured lifecycle error wire shape (pure — types only).
+export * from "./contracts/error-info.js";
+
 // Event contracts, span field matrices, and diagnostics (pure — no
 // crypto/network; hook/OTel span capture itself is a later phase).
 export * from "./contracts/otel-spans.js";

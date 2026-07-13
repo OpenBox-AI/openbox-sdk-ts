@@ -12,6 +12,7 @@ import {
   assertHookWireShape,
   buildConformanceRuntime
 } from "../src/conformance/index.js";
+import { ActivityContext } from "../src/contracts/context.js";
 import { hook } from "../src/contracts/event-factories.js";
 import { HookType } from "../src/contracts/otel-spans.js";
 import { EvaluationResult, Verdict, type JsonValue } from "../src/contracts/results.js";
@@ -230,7 +231,12 @@ describe("conformance scenarios", () => {
     const adapter = new CoreAdapter({ approvalPoller: poller });
 
     const evaluated = await client.evaluate({});
-    const drive = adapter.handleApproval(evaluated);
+    // The runtime always threads the originating ActivityContext — the poll is
+    // keyed on these IDs (approval_id in the scenario bodies is inert metadata).
+    const drive = adapter.handleApproval(
+      evaluated,
+      new ActivityContext({ workflowId: "wf-conf", runId: "run-conf", activityId: "act-conf" })
+    );
 
     if (scenario.expected === "approved") {
       await expect(drive).resolves.toBeUndefined();

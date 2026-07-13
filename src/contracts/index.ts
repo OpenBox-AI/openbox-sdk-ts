@@ -6,6 +6,7 @@
  * test/root-import-safety.test.ts).
  */
 export * from "./results.js";
+export * from "./error-info.js";
 export * from "./diagnostics.js";
 export * from "./otel-spans.js";
 export * from "./events.js";
