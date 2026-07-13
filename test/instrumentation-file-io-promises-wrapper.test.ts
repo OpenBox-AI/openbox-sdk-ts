@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { mkdtempSync, rmSync } from "node:fs";
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -7,9 +8,10 @@ import {
   writeFile as fsWriteFile
 } from "node:fs/promises";
 import type * as NodeFsPromisesModule from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OpenBoxClient } from "../src/client/index.js";
 import { OpenBoxConfig } from "../src/config/index.js";
@@ -20,9 +22,13 @@ import { GovernanceBlockedError } from "../src/errors/index.js";
 import { installFileIoPromisesWrapper } from "../src/instrumentation/file-io-promises-wrapper.js";
 import { OpenBoxRuntime } from "../src/runtime/index.js";
 
-// Per-session scratch directory (never /tmp directly — see environment instructions).
-const SCRATCH_DIR =
-  "/private/tmp/claude-501/-Users-tino-code-openbox-sdk-ts/5de7218d-f2c9-4173-bf12-f3d0147c9882/scratchpad";
+// Real (unpatched) mkdtempSync — runs at module scope before any wrapper is
+// installed, so creating the scratch dir never flows through governance.
+const SCRATCH_DIR = mkdtempSync(path.join(os.tmpdir(), "openbox-fs-promises-"));
+
+afterAll(() => {
+  rmSync(SCRATCH_DIR, { recursive: true, force: true });
+});
 
 const silentLogger = { warn() {}, error() {}, info() {} };
 const BOUND_CTX = new ActivityContext({ workflowId: "wf-1", activityId: "act-1", activityType: "job" });
