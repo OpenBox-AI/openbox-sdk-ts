@@ -43,7 +43,8 @@ import {
   mintTraceId,
   nowEpochNs,
   PendingTelemetry,
-  resolvePathLabel
+  resolvePathLabel,
+  shouldBypassFileInstrumentation
 } from "./file-io-shared.js";
 
 type ReadFileSyncFn = typeof NodeFsModule.readFileSync;
@@ -141,6 +142,11 @@ export function installFileIoSyncWrapper(options: FileIoSyncWrapperOptions): Fil
     ...args: Parameters<ReadFileSyncFn>
   ): ReturnType<ReadFileSyncFn> {
     const filePath = resolvePathLabel(args[0]);
+    // node_modules dependency I/O bypasses telemetry entirely — return the
+    // original sync result directly (no ids, no completed hook).
+    if (shouldBypassFileInstrumentation(filePath)) {
+      return originalReadFileSync(...args);
+    }
     const startTimeNs = nowEpochNs();
     let result: ReturnType<ReadFileSyncFn>;
     try {
@@ -157,6 +163,12 @@ export function installFileIoSyncWrapper(options: FileIoSyncWrapperOptions): Fil
     ...args: Parameters<WriteFileSyncFn>
   ): ReturnType<WriteFileSyncFn> {
     const filePath = resolvePathLabel(args[0]);
+    // node_modules dependency I/O bypasses telemetry entirely — run the original
+    // and return its (void) result directly (no byte count, no completed hook).
+    if (shouldBypassFileInstrumentation(filePath)) {
+      originalWriteFileSync(...args);
+      return;
+    }
     const bytesWritten = byteLength(args[1]);
     const startTimeNs = nowEpochNs();
     try {
@@ -173,6 +185,11 @@ export function installFileIoSyncWrapper(options: FileIoSyncWrapperOptions): Fil
     ...args: Parameters<MkdirSyncFn>
   ): ReturnType<MkdirSyncFn> {
     const filePath = resolvePathLabel(args[0]);
+    // node_modules dependency I/O bypasses telemetry entirely — return the
+    // original sync result directly (no ids, no completed hook).
+    if (shouldBypassFileInstrumentation(filePath)) {
+      return originalMkdirSync(...args);
+    }
     const startTimeNs = nowEpochNs();
     let result: ReturnType<MkdirSyncFn>;
     try {

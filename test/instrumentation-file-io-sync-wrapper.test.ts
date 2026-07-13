@@ -290,3 +290,54 @@ describe("installFileIoSyncWrapper — context binding, content safety, flush", 
     expect(fakeCore.evaluateRequests).toHaveLength(1);
   });
 });
+
+describe("installFileIoSyncWrapper — node_modules paths bypass telemetry (and governance)", () => {
+  it("readFileSync/writeFileSync/mkdirSync beneath node_modules run normally and send 0 evaluations", async () => {
+    const nmBase = path.join(scratchDir, "node_modules", "pkg");
+    mkdirSync(nmBase, { recursive: true }); // real fs — no wrapper installed yet
+    const readTarget = path.join(nmBase, "index.js");
+    writeFileSync(readTarget, "cached-dep"); // real pre-write
+
+    // A BLOCK verdict is queued to prove even a would-be-blocking Core is never
+    // consulted; sync fs is telemetry-only, so "bypass" means the completed hook.
+    const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "block", reason: "no" } });
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    activeHandle = installFileIoSyncWrapper({ runtime, logger: silentLogger });
+
+    const out = contextStore.activityScope(BOUND_CTX, () => {
+      writeFileSync(path.join(nmBase, "written.js"), "w"); // bypassed write
+      mkdirSync(path.join(nmBase, "nested", "deep"), { recursive: true }); // bypassed mkdir
+      return readFileSync(readTarget, "utf8"); // bypassed read
+    });
+    await activeHandle.flush();
+
+    expect(out).toBe("cached-dep"); // real read result preserved verbatim
+    expect(existsSync(path.join(nmBase, "written.js"))).toBe(true); // real write happened
+    expect(existsSync(path.join(nmBase, "nested", "deep"))).toBe(true); // real mkdir happened
+    expect(fakeCore.evaluateRequests).toHaveLength(0); // zero completed hooks emitted
+  });
+
+  it("a sibling path WITHOUT node_modules is still governed (emits its completed hook)", async () => {
+    const governed = path.join(scratchDir, "governed.txt");
+    const fakeCore = new FakeCore();
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    activeHandle = installFileIoSyncWrapper({ runtime, logger: silentLogger });
+
+    contextStore.activityScope(BOUND_CTX, () => writeFileSync(governed, "telemetered"));
+    await activeHandle.flush();
+
+    expect(fakeCore.evaluateRequests).toHaveLength(1); // completed hook WAS sent for the governed path
+  });
+
+  it("a bypassed readFileSync preserves the thrown fs error (ENOENT) unchanged and sends 0 evaluations", async () => {
+    const missing = path.join(scratchDir, "node_modules", "pkg", "nope.js");
+    const fakeCore = new FakeCore();
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    activeHandle = installFileIoSyncWrapper({ runtime, logger: silentLogger });
+
+    expect(() => contextStore.activityScope(BOUND_CTX, () => readFileSync(missing, "utf8"))).toThrow(/ENOENT/);
+    await activeHandle.flush();
+
+    expect(fakeCore.evaluateRequests).toHaveLength(0);
+  });
+});

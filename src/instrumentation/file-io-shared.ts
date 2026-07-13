@@ -46,6 +46,27 @@ export function resolvePathLabel(candidate: unknown): string {
 }
 
 /**
+ * Predicate shared by the async and sync file wrappers: `true` when a resolved
+ * path label opts OUT of ALL file instrumentation — no preflight governance and
+ * no completed telemetry; the wrapper calls straight through to the captured
+ * original fs function.
+ *
+ * The match is intentionally a case-sensitive, un-normalized SUBSTRING test on
+ * the label produced by `resolvePathLabel(...)` — NOT a `/node_modules/`
+ * path-segment match. Any label containing "node_modules" anywhere (a real
+ * dependency directory, a sibling like "node_modules_backup", or a traversal
+ * such as ".../node_modules/../secret") is treated as dependency I/O and skips
+ * governance. Keeping it broad and literal is deliberate: dependency file I/O is
+ * high-volume and outside the agent-governance threat model, so a looser match
+ * errs toward less telemetry noise rather than more false enforcement. A path a
+ * caller can influence to contain this substring is therefore NOT governed — do
+ * not rely on file governance for such paths.
+ */
+export function shouldBypassFileInstrumentation(filePath: string): boolean {
+  return filePath.includes("node_modules");
+}
+
+/**
  * Tracks fire-and-forget completed-telemetry promises so a SYNCHRONOUS fs
  * wrapper — which must return the original result before the async
  * `runtime.completed(...)` evaluation settles — can be drained on SDK close

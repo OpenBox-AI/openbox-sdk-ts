@@ -13,6 +13,13 @@ on import.
 > telemetry-blind; the one exception is sync `fs` (`readFileSync`/`writeFileSync`/
 > `mkdirSync`), which is telemetry-**visible** (emits a completed hook) yet still
 > unblockable — see the fs (sync) note below.
+>
+> **`node_modules` file bypass:** both file wrappers short-circuit any operation
+> whose resolved path label contains the substring `node_modules` — such calls
+> bypass **both governance (no preflight, no BLOCK enforcement) and telemetry (no
+> completed hook)**. The match is case-sensitive, un-normalized, and NOT a
+> path-segment match, so a caller-influenced path containing that substring is
+> unblockable and invisible — see the fs (`node_modules`) note below.
 
 ## Tier A1 (always available)
 
@@ -20,8 +27,8 @@ on import.
 |---|---|---|
 | **fetch** | global `fetch(...)` | requests to the configured Core origin + SDK-internal calls (recursion guard, by design) |
 | **node:http / node:https** | `http.request`/`http.get`/`https.request`/`https.get` (deferred-dispatch preflight — the request is never sent on BLOCK) | requests to the Core origin + SDK-internal calls (recursion guard); `CONNECT` tunnels and `upgrade`/websocket handshakes; `node:http2`; direct `net.Socket` writes |
-| **fs.promises** | `readFile` / `writeFile` (preflight-blockable) | `createReadStream`/`createWriteStream` (streaming is telemetry-only) |
-| **fs (sync)** | — telemetry-only, never preflight-blocks (see note below) | `readFileSync`/`writeFileSync`/`mkdirSync` always run before the hook; `appendFileSync`/`openSync`/`rmSync`/`unlinkSync`/fds/streams/watchers uninstrumented |
+| **fs.promises** | `readFile` / `writeFile` (preflight-blockable) | `createReadStream`/`createWriteStream` (streaming is telemetry-only); any path whose label contains `node_modules` (bypass — see note below) |
+| **fs (sync)** | — telemetry-only, never preflight-blocks (see note below) | `readFileSync`/`writeFileSync`/`mkdirSync` always run before the hook; any path whose label contains `node_modules` (bypass — see note below); `appendFileSync`/`openSync`/`rmSync`/`unlinkSync`/fds/streams/watchers uninstrumented |
 | **functions** | anything wrapped in `traced(fn)` | un-wrapped functions |
 
 `fetch`, `node:http`, and `node:https` all share the one
@@ -75,6 +82,39 @@ pre-operation blocking. Because the sync wrapper returns before its telemetry
 settles, `await` the controller's `flush()` (or a middleware `close()` that calls
 it) so the last fs event is not dropped. `instrumentation.fileEnabled: false`
 disables BOTH the async and sync file hooks.
+
+This limitation is explicitly accepted. A `Worker` + `Atomics.wait()` bridge
+could wait for Core while preserving the native sync return type, but it would
+freeze the calling JavaScript event loop for the full evaluation or approval
+window. Unrelated timers, requests, streams, Promise continuations, and parallel
+agent work on that thread would stop progressing and could time out. A custom
+SDK wrapper with a genuinely synchronous signature has the same constraint.
+The SDK therefore does not claim or simulate a started-stage hook for these sync
+APIs; use the async `fs.promises` wrapper when a verdict must be enforced before
+the filesystem operation.
+
+### fs (`node_modules`): dependency paths bypass governance AND telemetry
+
+Both file wrappers (async `fs.promises` and sync `fs`) short-circuit when the
+resolved path **label** contains the substring `node_modules`. Such a call runs
+the captured original fs function immediately: **no preflight (so a BLOCK verdict
+is never enforced), no started/completed hook, and no telemetry of any kind** —
+not even a byte count. This keeps high-volume dependency file I/O out of both the
+governance path and the telemetry stream.
+
+The test is deliberately a case-sensitive, **un-normalized substring** match on
+the label from `resolvePathLabel(...)` — it is **not** a `/node_modules/`
+path-segment match. Consequences to be aware of:
+
+- Any label containing `node_modules` anywhere bypasses — including siblings like
+  `node_modules_backup`, a file literally named `node_modules.tar`, and
+  traversals such as `.../node_modules/../secret`.
+- Because it precedes preflight, a caller who can influence a path to contain the
+  substring can make a file read/write **unblockable and invisible**. Do not rely
+  on file governance for paths that untrusted input can shape.
+
+There is no config option for this exclusion; it is an internal, always-on
+property of the file wrappers.
 
 ## Tier A2/B (opt-in via `databases`)
 

@@ -1,5 +1,11 @@
 import { createRequire } from "node:module";
-import { readFile as fsReadFile, unlink as fsUnlink, writeFile as fsWriteFile } from "node:fs/promises";
+import {
+  mkdir as fsMkdir,
+  readFile as fsReadFile,
+  rm as fsRm,
+  unlink as fsUnlink,
+  writeFile as fsWriteFile
+} from "node:fs/promises";
 import type * as NodeFsPromisesModule from "node:fs/promises";
 import * as path from "node:path";
 
@@ -209,6 +215,87 @@ describe("installFileIoPromisesWrapper — restore + fail-loud", () => {
       );
     } finally {
       fsp.readFile = originalReadFile;
+    }
+  });
+});
+
+describe("installFileIoPromisesWrapper — node_modules paths bypass governance AND telemetry", () => {
+  let nmRoot: string;
+  let nmFile: string;
+
+  beforeEach(() => {
+    // Unique per-test tree so runs never collide; the dependency file lives under
+    // a real `node_modules/` segment and is created with the UNPATCHED fs below,
+    // before any wrapper is installed.
+    nmRoot = path.join(SCRATCH_DIR, `openbox-nm-${process.hrtime.bigint().toString()}`);
+    nmFile = path.join(nmRoot, "node_modules", "pkg", "index.js");
+  });
+
+  afterEach(async () => {
+    await fsRm(nmRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("readFile beneath node_modules returns the real content even when Core is set to BLOCK, sending 0 evaluations", async () => {
+    await fsMkdir(path.dirname(nmFile), { recursive: true });
+    await fsWriteFile(nmFile, "module.exports = 1;"); // pre-write with the unpatched fs
+    const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "block", reason: "no" } });
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    const handle = installFileIoPromisesWrapper({ runtime, logger: silentLogger });
+
+    try {
+      const content = await contextStore.activityScope(BOUND_CTX, () => fsReadFile(nmFile, "utf-8"));
+      expect(content).toBe("module.exports = 1;"); // real result, verbatim
+      expect(fakeCore.evaluateRequests).toHaveLength(0); // preflight never ran → no Core evaluation
+    } finally {
+      handle.restore();
+    }
+  });
+
+  it("writeFile beneath node_modules writes the real bytes even when Core is set to BLOCK, sending 0 evaluations", async () => {
+    await fsMkdir(path.dirname(nmFile), { recursive: true });
+    const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "block", reason: "no" } });
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    const handle = installFileIoPromisesWrapper({ runtime, logger: silentLogger });
+
+    try {
+      await contextStore.activityScope(BOUND_CTX, () => fsWriteFile(nmFile, "written-despite-block"));
+      expect(fakeCore.evaluateRequests).toHaveLength(0);
+    } finally {
+      handle.restore();
+    }
+    expect(await fsReadFile(nmFile, "utf-8")).toBe("written-despite-block"); // bytes actually landed on disk
+  });
+
+  it("a sibling path WITHOUT node_modules is still governed under the same wrapper (BLOCK throws)", async () => {
+    // Proves the bypass is scoped to the predicate, not a blanket disable.
+    const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "block", reason: "no" } });
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    const handle = installFileIoPromisesWrapper({ runtime, logger: silentLogger });
+
+    try {
+      await expect(
+        contextStore.activityScope(BOUND_CTX, () => fsWriteFile(testFilePath, "should be blocked"))
+      ).rejects.toBeInstanceOf(GovernanceBlockedError);
+      expect(fakeCore.evaluateRequests).toHaveLength(1); // preflight WAS evaluated for the governed path
+    } finally {
+      handle.restore();
+    }
+    await expect(fsReadFile(testFilePath, "utf-8")).rejects.toThrow(/ENOENT/); // never written
+  });
+
+  it("a bypassed readFile preserves the thrown fs error (ENOENT) unchanged and still sends 0 evaluations", async () => {
+    const missing = path.join(nmRoot, "node_modules", "pkg", "missing.js"); // parent dir never created
+    const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "block", reason: "no" } });
+    const { runtime, contextStore } = buildRuntime(fakeCore);
+    const handle = installFileIoPromisesWrapper({ runtime, logger: silentLogger });
+
+    try {
+      await expect(contextStore.activityScope(BOUND_CTX, () => fsReadFile(missing, "utf-8"))).rejects.toThrow(
+        /ENOENT/
+      );
+      expect(fakeCore.evaluateRequests).toHaveLength(0);
+    } finally {
+      handle.restore();
     }
   });
 });

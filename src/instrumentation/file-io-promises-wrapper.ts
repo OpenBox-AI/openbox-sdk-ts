@@ -29,7 +29,14 @@ import type * as NodeFsPromisesModule from "node:fs/promises";
 import type { ClientLogger } from "../client/index.js";
 import type { OpenBoxRuntime } from "../runtime/openbox-runtime.js";
 import { buildCompletedFileSpan, buildStartedFileSpan } from "../spans/file-span-builder.js";
-import { byteLength, mintSpanId, mintTraceId, nowEpochNs, resolvePathLabel } from "./file-io-shared.js";
+import {
+  byteLength,
+  mintSpanId,
+  mintTraceId,
+  nowEpochNs,
+  resolvePathLabel,
+  shouldBypassFileInstrumentation
+} from "./file-io-shared.js";
 
 type ReadFileFn = typeof NodeFsPromisesModule.readFile;
 type WriteFileFn = typeof NodeFsPromisesModule.writeFile;
@@ -72,6 +79,11 @@ export function installFileIoPromisesWrapper(
     ...args: Parameters<ReadFileFn>
   ): Promise<Awaited<ReturnType<ReadFileFn>>> {
     const filePath = resolvePathLabel(args[0]);
+    // node_modules dependency I/O bypasses governance AND telemetry entirely —
+    // call the original immediately (no preflight, no ids, no completed hook).
+    if (shouldBypassFileInstrumentation(filePath)) {
+      return originalReadFile(...args);
+    }
     const spanId = mintSpanId();
     const traceId = mintTraceId();
     const startTimeNs = nowEpochNs();
@@ -126,6 +138,11 @@ export function installFileIoPromisesWrapper(
     ...args: Parameters<WriteFileFn>
   ): Promise<Awaited<ReturnType<WriteFileFn>>> {
     const filePath = resolvePathLabel(args[0]);
+    // node_modules dependency I/O bypasses governance AND telemetry entirely —
+    // call the original immediately (no preflight, no byte count, no completed hook).
+    if (shouldBypassFileInstrumentation(filePath)) {
+      return originalWriteFile(...args);
+    }
     const bytesWritten = byteLength(args[1]);
     const spanId = mintSpanId();
     const traceId = mintTraceId();
