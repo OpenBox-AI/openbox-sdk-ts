@@ -66,7 +66,10 @@ export class ContextStore {
   private readonly traceMap: BoundedTraceMap;
   private readonly abortedActivities = new Set<string>();
   private readonly maxAbortedActivities: number;
-  private haltFlag = false;
+  // Per-run HALT requests — keyed `(workflowId, runId)` so a HALT verdict on
+  // one run never suppresses a DIFFERENT run's future work, even for two
+  // concurrent runs of the same workflow definition sharing one runtime.
+  private readonly haltedRuns = new Set<string>();
 
   constructor(options: ContextStoreOptions = {}) {
     this.traceMap = new BoundedTraceMap(options.traceMap);
@@ -160,13 +163,28 @@ export class ContextStore {
 
   // ── Governance flags (abort short-circuit, halt) ────────────────────────
 
-  private static activityKey(workflowId: string | null, activityId: string | null): string {
-    return `${String(workflowId)}:${String(activityId)}`;
+  /**
+   * `(workflowId, runId, activityId)` — keeping `runId` in the key matters:
+   * two runs of the same workflow reusing an `activityId` (e.g., a retried
+   * thread) must never collide, or one run's abort would wrongly suppress the
+   * other's activity. Do NOT drop `activityId` either — keying by
+   * `(workflowId, runId)` alone would abort every activity in the run.
+   */
+  private static activityKey(
+    workflowId: string | null,
+    runId: string | null,
+    activityId: string | null
+  ): string {
+    return `${String(workflowId)}:${String(runId)}:${String(activityId)}`;
+  }
+
+  private static runKey(workflowId: string | null, runId: string | null): string {
+    return `${String(workflowId)}:${String(runId)}`;
   }
 
   /** Record that a prior hook verdict already stopped this activity (fail-fast, no re-evaluation). */
-  markActivityAborted(workflowId: string | null, activityId: string | null): void {
-    const key = ContextStore.activityKey(workflowId, activityId);
+  markActivityAborted(workflowId: string | null, runId: string | null, activityId: string | null): void {
+    const key = ContextStore.activityKey(workflowId, runId, activityId);
     if (this.abortedActivities.has(key)) return;
     this.abortedActivities.add(key);
     // Bounded FIFO: an evicted-then-re-executed activity is simply re-evaluated
@@ -177,21 +195,38 @@ export class ContextStore {
     }
   }
 
-  isActivityAborted(workflowId: string | null, activityId: string | null): boolean {
-    return this.abortedActivities.has(ContextStore.activityKey(workflowId, activityId));
+  isActivityAborted(workflowId: string | null, runId: string | null, activityId: string | null): boolean {
+    return this.abortedActivities.has(ContextStore.activityKey(workflowId, runId, activityId));
   }
 
-  clearActivityAborted(workflowId: string | null, activityId: string | null): void {
-    this.abortedActivities.delete(ContextStore.activityKey(workflowId, activityId));
+  clearActivityAborted(workflowId: string | null, runId: string | null, activityId: string | null): void {
+    this.abortedActivities.delete(ContextStore.activityKey(workflowId, runId, activityId));
   }
 
-  /** Expose a HALT request; the framework adapter decides how to stop future work. */
-  requestHalt(): void {
-    this.haltFlag = true;
+  /** Request a HALT for this run only; the framework adapter decides how to stop future work. */
+  requestHalt(workflowId: string | null, runId: string | null): void {
+    this.haltedRuns.add(ContextStore.runKey(workflowId, runId));
   }
 
-  get haltRequested(): boolean {
-    return this.haltFlag;
+  /** Whether THIS run has a pending HALT request — never true for a different run. */
+  isHaltRequested(workflowId: string | null, runId: string | null): boolean {
+    return this.haltedRuns.has(ContextStore.runKey(workflowId, runId));
+  }
+
+  /**
+   * Drop a run's HALT entry — call on run terminal (RUN_FINISHED / RUN_ERROR) so
+   * `haltedRuns` stays bounded on a long-lived runtime. Deliberately NO FIFO
+   * eviction like the abort set: silently forgetting a pending HALT would fail
+   * OPEN (the abort set's eviction fails safe via re-evaluation; a stop signal
+   * has no such backstop). Consumers own per-run cleanup; `clear()` wipes all.
+   */
+  clearHalt(workflowId: string | null, runId: string | null): void {
+    this.haltedRuns.delete(ContextStore.runKey(workflowId, runId));
+  }
+
+  /** Observability/leak-test hook for the per-run HALT set. */
+  haltedRunsSize(): number {
+    return this.haltedRuns.size;
   }
 
   // ── Shutdown ──────────────────────────────────────────────────────────────
@@ -200,6 +235,6 @@ export class ContextStore {
   clear(): void {
     this.traceMap.clear();
     this.abortedActivities.clear();
-    this.haltFlag = false;
+    this.haltedRuns.clear();
   }
 }

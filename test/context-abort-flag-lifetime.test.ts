@@ -12,37 +12,37 @@ import { ContextStore } from "../src/context/index.js";
 describe("aborted-activity flag — persistent but bounded", () => {
   it("persists after the activity scope exits (short-circuits future execution)", () => {
     const store = new ContextStore();
-    const ctx = new ActivityContext({ workflowId: "wf", activityId: "act" });
+    const ctx = new ActivityContext({ workflowId: "wf", runId: "run", activityId: "act" });
     store.activityScope(ctx, () => {
-      store.markActivityAborted(ctx.workflowId, ctx.activityId);
+      store.markActivityAborted(ctx.workflowId, ctx.runId, ctx.activityId);
     });
-    expect(store.isActivityAborted("wf", "act")).toBe(true);
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(true);
   });
 
   it("evicts the oldest flag past the cap (FIFO) — no unbounded growth", () => {
     const store = new ContextStore({ maxAbortedActivities: 3 });
-    for (let i = 0; i < 5; i++) store.markActivityAborted("wf", `act-${i}`);
+    for (let i = 0; i < 5; i++) store.markActivityAborted("wf", "run", `act-${i}`);
     expect(store.abortedActivitiesSize()).toBe(3);
-    expect(store.isActivityAborted("wf", "act-0")).toBe(false); // evicted (oldest)
-    expect(store.isActivityAborted("wf", "act-1")).toBe(false); // evicted
-    expect(store.isActivityAborted("wf", "act-4")).toBe(true); // retained (newest)
+    expect(store.isActivityAborted("wf", "run", "act-0")).toBe(false); // evicted (oldest)
+    expect(store.isActivityAborted("wf", "run", "act-1")).toBe(false); // evicted
+    expect(store.isActivityAborted("wf", "run", "act-4")).toBe(true); // retained (newest)
   });
 
   it("re-marking an existing flag does not grow or reorder the set", () => {
     const store = new ContextStore({ maxAbortedActivities: 2 });
-    store.markActivityAborted("wf", "a");
-    store.markActivityAborted("wf", "b");
-    store.markActivityAborted("wf", "a"); // idempotent
+    store.markActivityAborted("wf", "run", "a");
+    store.markActivityAborted("wf", "run", "b");
+    store.markActivityAborted("wf", "run", "a"); // idempotent
     expect(store.abortedActivitiesSize()).toBe(2);
-    expect(store.isActivityAborted("wf", "a")).toBe(true);
-    expect(store.isActivityAborted("wf", "b")).toBe(true);
+    expect(store.isActivityAborted("wf", "run", "a")).toBe(true);
+    expect(store.isActivityAborted("wf", "run", "b")).toBe(true);
   });
 
   it("clear() drops all flags (runtime close)", () => {
     const store = new ContextStore();
-    store.markActivityAborted("wf", "act");
+    store.markActivityAborted("wf", "run", "act");
     store.clear();
-    expect(store.isActivityAborted("wf", "act")).toBe(false);
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(false);
     expect(store.abortedActivitiesSize()).toBe(0);
   });
 });

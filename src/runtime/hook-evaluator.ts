@@ -132,7 +132,7 @@ export class HookEvaluator {
   }
 
   private failFastIfAborted(ctx: ActivityContext): void {
-    if (!this.deps.contextStore.isActivityAborted(ctx.workflowId, ctx.activityId)) return;
+    if (!this.deps.contextStore.isActivityAborted(ctx.workflowId, ctx.runId, ctx.activityId)) return;
     const reason = "Activity aborted by a prior hook verdict";
     const blocked = new EvaluationResult();
     blocked.verdict = Verdict.BLOCK;
@@ -158,7 +158,7 @@ export class HookEvaluator {
   }
 
   private markStopped(result: EvaluationResult, ctx: ActivityContext): void {
-    this.deps.contextStore.markActivityAborted(ctx.workflowId, ctx.activityId);
-    if (result.verdict === Verdict.HALT) this.deps.contextStore.requestHalt();
+    this.deps.contextStore.markActivityAborted(ctx.workflowId, ctx.runId, ctx.activityId);
+    if (result.verdict === Verdict.HALT) this.deps.contextStore.requestHalt(ctx.workflowId, ctx.runId);
   }
 }

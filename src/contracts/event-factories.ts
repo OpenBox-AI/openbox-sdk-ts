@@ -126,7 +126,7 @@ export interface ActivityCompletedOptions extends WorkflowEventOptions {
 export function activityCompleted(options: ActivityCompletedOptions): EventEnvelope {
   const payload = baseWorkflowPayload(options);
   if (options.result !== undefined && options.result !== null) {
-    payload["result"] = options.result;
+    payload["activity_output"] = options.result;
   }
   if (options.error !== undefined && options.error !== null) {
     payload["error"] = options.error;

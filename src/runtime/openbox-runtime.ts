@@ -92,12 +92,17 @@ export class OpenBoxRuntime {
       await this.adapter.handleApproval(result, approvalContextFromEvent(event));
       return result;
     }
-    return this.enforceLifecycle(result);
+    const { workflowId, runId } = workflowRunIds(event);
+    return this.enforceLifecycle(result, workflowId, runId);
   }
 
-  private enforceLifecycle(result: EvaluationResult): EvaluationResult {
+  private enforceLifecycle(
+    result: EvaluationResult,
+    workflowId: string | null,
+    runId: string | null
+  ): EvaluationResult {
     if (verdictShouldStop(result.verdict)) {
-      if (result.verdict === Verdict.HALT) this.contextStore.requestHalt();
+      if (result.verdict === Verdict.HALT) this.contextStore.requestHalt(workflowId, runId);
       this.adapter.raiseLifecycleBlocked(result);
       // Defense in depth: see the matching comment in HookEvaluator.preflight.
       throw new GovernanceBlockedError(result.verdict, result.reason ?? "Blocked (adapter returned)");
@@ -136,6 +141,21 @@ export class OpenBoxRuntime {
 }
 
 /**
+ * `workflow_id`/`run_id` from an event's flat wire `payload` — the single
+ * source both `approvalContextFromEvent` and `evaluateLifecycle`'s per-run
+ * HALT threading read from, so the two never drift.
+ */
+function workflowRunIds(event: EventEnvelope): { workflowId: string | null; runId: string | null } {
+  const payload = event.payload;
+  const workflowId = payload["workflow_id"];
+  const runId = payload["run_id"];
+  return {
+    workflowId: typeof workflowId === "string" ? workflowId : null,
+    runId: typeof runId === "string" ? runId : null
+  };
+}
+
+/**
  * Approval context for a lifecycle event. `workflow_id`/`run_id` live in the
  * flat wire `payload`; `activity_id` is a first-class envelope field. Core's
  * evaluate response omits all three, so the poll must be built from the
@@ -145,13 +165,11 @@ export class OpenBoxRuntime {
  * (rejects without polling) rather than polling with a partial key.
  */
 function approvalContextFromEvent(event: EventEnvelope): ActivityContext {
-  const payload = event.payload;
-  const workflowId = payload["workflow_id"];
-  const runId = payload["run_id"];
-  const activityId = payload["activity_id"];
+  const { workflowId, runId } = workflowRunIds(event);
+  const activityId = event.payload["activity_id"];
   return new ActivityContext({
-    workflowId: typeof workflowId === "string" ? workflowId : null,
-    runId: typeof runId === "string" ? runId : null,
+    workflowId,
+    runId,
     activityId: event.activityId ?? (typeof activityId === "string" ? activityId : null)
   });
 }

@@ -36,6 +36,60 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`@openbox-ai/openbox-sdk-ts/client`, `.../runtime`, ...). Releases up to
   `0.1.2` in this changelog shipped under the old name.
 
+## [1.0.1] - 2026-07-17
+
+`@openbox-ai/openbox-copilotkit@0.4.0` migration prerequisites — three
+base-SDK fixes/hardenings its adapter depends on.
+
+### Fixed
+
+- **`activityCompleted` emitted the activity output under the wrong wire
+  key.** The lifecycle event wrote `payload["result"]`, but Core reads
+  `activity_output` (`ActivityOutput json:"activity_output"`; no
+  payload-level `result` tag), so every activity output was silently dropped
+  on ingestion. `activityStarted`'s `activity_input` was already correct —
+  this was an asymmetric bug on the output side, also inherited by
+  `openbox-langchain-sdk-ts`. Fixed to write `payload["activity_output"]`;
+  the ergonomic option name `result` is unchanged. (The unrelated
+  `function_call` **span** field `result`, in `otel-spans`, was already
+  correct and stays untouched.)
+
+### Added
+
+- **Cancellable `ApprovalPoller`** — a controller shutdown can now abort an
+  in-flight approval wait instead of leaking it. `ApprovalPollerOptions`
+  gains an optional `abortSignal` (constructor option; `waitForDecision`'s
+  signature is unchanged, so the stock `CoreAdapter` is unaffected). The
+  internal poll-loop `sleep` is now abort-aware and `unref`'d — it rejects
+  immediately on abort instead of pinning the process or waiting out the
+  full interval. `OpenBoxClient.pollApproval` gains an optional `signal`
+  parameter, composed with the request timeout via `AbortSignal.any([...])`,
+  so the in-flight fetch is aborted too. An abort surfaces as a fail-safe
+  `ApprovalRejectedError` ("approval wait aborted (shutdown) — failing
+  safe") — distinct from the existing poll-error→`null`→retry path, so a
+  shutdown can never be mistaken for a transient poll failure and silently
+  retried.
+
+### Changed
+
+- **`ContextStore` abort/halt keys are now per-run — a breaking `ContextStore`
+  API change.** The aborted-activity set was keyed `(workflowId,
+  activityId)`, so two runs of the same workflow reusing an `activityId`
+  could cross-suppress each other's activity; it is now keyed `(workflowId,
+  runId, activityId)`. `markActivityAborted`/`isActivityAborted`/
+  `clearActivityAborted` all take an additional `runId` parameter. HALT was
+  a single process-wide `haltFlag` boolean; it is now tracked per run.
+  `requestHalt(workflowId, runId)` and the new `isHaltRequested(workflowId,
+  runId)` replace the old no-arg `requestHalt()` and the `haltRequested`
+  getter. `hook-evaluator.ts` and `openbox-runtime.ts` (the only in-repo
+  consumers) are updated accordingly. Accepted as a coordinated `1.0.1`
+  change since the base API only reached `1.0.0` in the previous release and
+  this package has no other in-repo readers yet. A new
+  `clearHalt(workflowId, runId)` (mirroring `clearActivityAborted`) lets a
+  consumer drop a run's HALT entry on run terminal so `haltedRuns` stays
+  bounded on a long-lived runtime; there is deliberately no FIFO eviction for
+  HALT (silently forgetting a stop signal would fail open).
+
 ## [0.1.2] - 2026-07-09
 
 ### Fixed

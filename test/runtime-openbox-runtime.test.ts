@@ -79,14 +79,16 @@ describe("OpenBoxRuntime.evaluateLifecycle — BLOCK/HALT", () => {
     expect(adapter.calls.map((c) => c.kind)).toStrictEqual(["raiseLifecycleBlocked"]);
   });
 
-  it("HALT sets contextStore.haltRequested and throws GovernanceHaltError", async () => {
+  it("HALT sets contextStore.isHaltRequested for this run and throws GovernanceHaltError", async () => {
     const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "halt", reason: "kill" } });
     const adapter = new FakeAdapter();
     const runtime = buildRuntime(fakeCore, { adapter });
 
-    expect(runtime.contextStore.haltRequested).toBe(false);
+    expect(runtime.contextStore.isHaltRequested("wf-1", "run-1")).toBe(false);
     await expect(runtime.evaluateLifecycle(workflowStarted(WF))).rejects.toBeInstanceOf(GovernanceHaltError);
-    expect(runtime.contextStore.haltRequested).toBe(true);
+    expect(runtime.contextStore.isHaltRequested("wf-1", "run-1")).toBe(true);
+    // Per-run: a HALT on wf-1/run-1 must never leak into a different run.
+    expect(runtime.contextStore.isHaltRequested("wf-1", "run-2")).toBe(false);
   });
 
   it("a CoreAdapter (no custom adapter) maps BLOCK/HALT to the same base error types", async () => {
@@ -165,13 +167,13 @@ describe("OpenBoxRuntime.close", () => {
   it("clears the context store and is idempotent", () => {
     const fakeCore = new FakeCore();
     const runtime = buildRuntime(fakeCore);
-    runtime.contextStore.markActivityAborted("wf", "act");
-    runtime.contextStore.requestHalt();
+    runtime.contextStore.markActivityAborted("wf", "run", "act");
+    runtime.contextStore.requestHalt("wf", "run");
     runtime.contextStore.registerTrace("f".repeat(32), new ActivityContext());
 
     runtime.close();
-    expect(runtime.contextStore.isActivityAborted("wf", "act")).toBe(false);
-    expect(runtime.contextStore.haltRequested).toBe(false);
+    expect(runtime.contextStore.isActivityAborted("wf", "run", "act")).toBe(false);
+    expect(runtime.contextStore.isHaltRequested("wf", "run")).toBe(false);
     expect(runtime.contextStore.traceMapSize()).toBe(0);
 
     expect(() => runtime.close()).not.toThrow();
