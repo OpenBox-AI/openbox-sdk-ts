@@ -77,7 +77,9 @@ export function installNodeHttpGovernancePatch(
   const { runtime, module: moduleName } = options;
   const logger = options.logger ?? console;
   const require = createRequire(import.meta.url);
-  const httpModule = require(`node:${moduleName}`) as HttpLikeModule;
+  const httpModule = (
+    moduleName === "http" ? require("node:http") : require("node:https")
+  ) as HttpLikeModule;
 
   const originalRequest = httpModule.request;
   const originalGet = httpModule.get;
