@@ -116,6 +116,9 @@ export class ApprovalPoller {
     activityId: string
   ): Promise<ApprovalResult> {
     const startedAt = performance.now();
+    // Loop-invariant (maxWaitMs is readonly): round once here for the timeout
+    // error's reported budget rather than in the timed-out branch below.
+    const roundedMaxWaitMs = this.maxWaitMs !== null ? Math.round(this.maxWaitMs) : null;
     let attempt = 0;
     let consecutiveFailures = 0;
     for (;;) {
@@ -132,7 +135,7 @@ export class ApprovalPoller {
         throw new ApprovalTimeoutError();
       }
       if (this.timedOut(startedAt)) {
-        throw new ApprovalTimeoutError(this.maxWaitMs !== null ? Math.round(this.maxWaitMs) : null);
+        throw new ApprovalTimeoutError(roundedMaxWaitMs);
       }
       try {
         await sleep(this.nextInterval(attempt), this.abortSignal);
