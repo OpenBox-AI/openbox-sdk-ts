@@ -236,14 +236,26 @@ export class OpenBoxClient {
 
   // ── Approval polling ──────────────────────────────────────────────────────
 
-  /** Poll HITL approval status once. Returns null on poll failure (still pending). */
+  /**
+   * Poll HITL approval status once. Returns null on poll failure (still
+   * pending). `signal` (e.g., a controller-shutdown abort) is composed with
+   * the request timeout so either can cancel the in-flight fetch — but only a
+   * caller-provided abort surfaces (thrown, not swallowed to null): the poller
+   * must fail safe on shutdown rather than treat it as a transient failure to
+   * retry. An internal-timeout-only abort keeps the existing null/retry
+   * behavior.
+   */
   async pollApproval(
     workflowId: string,
     runId: string,
-    activityId: string
+    activityId: string,
+    signal?: AbortSignal
   ): Promise<ApprovalResult | null> {
     const payload = { workflow_id: workflowId, run_id: runId, activity_id: activityId };
     const { url, headers, body } = this.prepared("POST", APPROVAL_PATH, payload);
+    const composedSignal = signal
+      ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal])
+      : AbortSignal.timeout(this.timeoutMs);
     let response: Response;
     try {
       response = await runAsInternal(() =>
@@ -251,10 +263,11 @@ export class OpenBoxClient {
           method: "POST",
           headers,
           body,
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: composedSignal
         })
       );
     } catch (e) {
+      if (signal?.aborted) throw e;
       this.logger.warn(`Failed to poll approval status: ${errorMessage(e)}`);
       return null;
     }

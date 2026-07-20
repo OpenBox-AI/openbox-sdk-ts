@@ -14,7 +14,7 @@
 
 import type { OpenBoxClient } from "../client/index.js";
 import type { ApprovalResult } from "../contracts/results.js";
-import { ApprovalTimeoutError } from "../errors/index.js";
+import { ApprovalRejectedError, ApprovalTimeoutError } from "../errors/index.js";
 
 export interface ApprovalPollerOptions {
   pollIntervalMs?: number;
@@ -22,10 +22,40 @@ export interface ApprovalPollerOptions {
   backoffMultiplier?: number; // 1.0 = constant interval
   maxIntervalMs?: number;
   maxConsecutiveFailures?: number;
+  /**
+   * Abort an in-flight wait (e.g., controller shutdown). Constructor option
+   * only, not a `waitForDecision` param — the stock `CoreAdapter` (which calls
+   * `waitForDecision(wf, run, act)`) stays unchanged. Checked at the top of
+   * each poll loop iteration and threaded into both `sleep` (interrupts a
+   * parked wait instead of waiting it out) and `client.pollApproval` (aborts
+   * the in-flight fetch). Fails SAFE on abort — throws `ApprovalRejectedError`,
+   * never treats the abort as a transient poll failure to retry.
+   */
+  abortSignal?: AbortSignal;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Abort-aware, unref'd delay. `unref()` so a pending sleep during a parked
+ * approval wait never keeps the process alive on its own; an abort rejects
+ * immediately instead of waiting out the full interval.
+ */
+function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error("sleep aborted"));
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new Error("sleep aborted"));
+    };
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timer.unref?.();
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export class ApprovalPoller {
@@ -39,6 +69,7 @@ export class ApprovalPoller {
   // consecutive poll failures raise ApprovalTimeoutError (fail-safe — the
   // operation does not run).
   private readonly maxConsecutiveFailures: number;
+  private readonly abortSignal: AbortSignal | undefined;
 
   constructor(client: OpenBoxClient, options: ApprovalPollerOptions = {}) {
     this.client = client;
@@ -47,6 +78,7 @@ export class ApprovalPoller {
     this.backoff = options.backoffMultiplier ?? 1.0;
     this.maxIntervalMs = options.maxIntervalMs ?? 60000;
     this.maxConsecutiveFailures = options.maxConsecutiveFailures ?? 60;
+    this.abortSignal = options.abortSignal;
   }
 
   private nextInterval(attempt: number): number {
@@ -61,6 +93,22 @@ export class ApprovalPoller {
     return result !== null && !result.isPending();
   }
 
+  /** Fail-safe rejection distinct from the poll-error→null→retry path — the operation must not run. */
+  private static abortRejection(): ApprovalRejectedError {
+    return new ApprovalRejectedError("approval wait aborted (shutdown) — failing safe");
+  }
+
+  /** Throw the fail-safe abort rejection if `abortSignal` has already fired. */
+  private throwIfAborted(): void {
+    if (this.abortSignal?.aborted) throw ApprovalPoller.abortRejection();
+  }
+
+  /** Convert an abort-caused rejection to the fail-safe error; rethrow anything else unchanged. */
+  private rejectIfAborted(error: unknown): never {
+    if (this.abortSignal?.aborted) throw ApprovalPoller.abortRejection();
+    throw error;
+  }
+
   /** Block until the approval is decided/expired, or the budget runs out. */
   async waitForDecision(
     workflowId: string,
@@ -71,7 +119,13 @@ export class ApprovalPoller {
     let attempt = 0;
     let consecutiveFailures = 0;
     for (;;) {
-      const result = await this.client.pollApproval(workflowId, runId, activityId);
+      this.throwIfAborted();
+      let result: ApprovalResult | null;
+      try {
+        result = await this.client.pollApproval(workflowId, runId, activityId, this.abortSignal);
+      } catch (error) {
+        this.rejectIfAborted(error);
+      }
       if (ApprovalPoller.isTerminal(result)) return result as ApprovalResult;
       consecutiveFailures = result === null ? consecutiveFailures + 1 : 0;
       if (consecutiveFailures >= this.maxConsecutiveFailures) {
@@ -80,7 +134,11 @@ export class ApprovalPoller {
       if (this.timedOut(startedAt)) {
         throw new ApprovalTimeoutError(this.maxWaitMs !== null ? Math.round(this.maxWaitMs) : null);
       }
-      await sleep(this.nextInterval(attempt));
+      try {
+        await sleep(this.nextInterval(attempt), this.abortSignal);
+      } catch (error) {
+        this.rejectIfAborted(error);
+      }
       attempt += 1;
     }
   }
