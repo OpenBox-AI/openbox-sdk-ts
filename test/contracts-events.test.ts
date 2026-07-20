@@ -170,7 +170,11 @@ describe("toPayloadDict", () => {
       error: { type: "ToolError", message: "boom", stack_trace: "ToolError: boom\n  at x" },
       attempt: 3
     }).toPayloadDict();
-    expect(body["result"]).toStrictEqual({ orderId: "ORD-1" });
+    // Wire key is `activity_output` (matches Core's `ActivityOutput json:"activity_output"`
+    // and the `activityStarted`/`activity_input` symmetry) — `result` is the ergonomic
+    // option name only and must never appear on the wire.
+    expect(body["activity_output"]).toStrictEqual({ orderId: "ORD-1" });
+    expect(body).not.toHaveProperty("result");
     expect(body["error"]).toStrictEqual({
       type: "ToolError",
       message: "boom",
