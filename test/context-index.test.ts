@@ -210,36 +210,64 @@ describe("ContextStore — trace map direct API", () => {
 describe("ContextStore — governance flags", () => {
   it("markActivityAborted / isActivityAborted / clearActivityAborted", () => {
     const store = new ContextStore();
-    expect(store.isActivityAborted("wf", "act")).toBe(false);
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(false);
 
-    store.markActivityAborted("wf", "act");
-    expect(store.isActivityAborted("wf", "act")).toBe(true);
-    expect(store.isActivityAborted("wf", "other-activity")).toBe(false);
+    store.markActivityAborted("wf", "run", "act");
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(true);
+    expect(store.isActivityAborted("wf", "run", "other-activity")).toBe(false);
 
-    store.clearActivityAborted("wf", "act");
-    expect(store.isActivityAborted("wf", "act")).toBe(false);
+    store.clearActivityAborted("wf", "run", "act");
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(false);
   });
 
-  it("requestHalt / haltRequested", () => {
+  it("the abort key includes runId — two runs of the same workflow reusing an activityId never collide", () => {
     const store = new ContextStore();
-    expect(store.haltRequested).toBe(false);
-    store.requestHalt();
-    expect(store.haltRequested).toBe(true);
+    store.markActivityAborted("wf", "run-A", "act");
+
+    expect(store.isActivityAborted("wf", "run-A", "act")).toBe(true);
+    expect(store.isActivityAborted("wf", "run-B", "act")).toBe(false);
+  });
+
+  it("requestHalt / isHaltRequested", () => {
+    const store = new ContextStore();
+    expect(store.isHaltRequested("wf", "run")).toBe(false);
+    store.requestHalt("wf", "run");
+    expect(store.isHaltRequested("wf", "run")).toBe(true);
+  });
+
+  it("HALT is per-run — requesting halt for one run never halts a different run", () => {
+    const store = new ContextStore();
+    store.requestHalt("wf", "run-A");
+
+    expect(store.isHaltRequested("wf", "run-A")).toBe(true);
+    expect(store.isHaltRequested("wf", "run-B")).toBe(false);
+  });
+
+  it("clearHalt drops only that run's entry and bounds haltedRuns", () => {
+    const store = new ContextStore();
+    store.requestHalt("wf", "run-A");
+    store.requestHalt("wf", "run-B");
+    expect(store.haltedRunsSize()).toBe(2);
+
+    store.clearHalt("wf", "run-A");
+    expect(store.isHaltRequested("wf", "run-A")).toBe(false);
+    expect(store.isHaltRequested("wf", "run-B")).toBe(true);
+    expect(store.haltedRunsSize()).toBe(1);
   });
 });
 
 describe("ContextStore.clear", () => {
-  it("drops trace map entries, aborted flags, and the halt flag (idempotent)", () => {
+  it("drops trace map entries, aborted flags, and halted runs (idempotent)", () => {
     const store = new ContextStore();
     store.registerTrace("e".repeat(32), new ActivityContext());
-    store.markActivityAborted("wf", "act");
-    store.requestHalt();
+    store.markActivityAborted("wf", "run", "act");
+    store.requestHalt("wf", "run");
 
     store.clear();
 
     expect(store.traceMapSize()).toBe(0);
-    expect(store.isActivityAborted("wf", "act")).toBe(false);
-    expect(store.haltRequested).toBe(false);
+    expect(store.isActivityAborted("wf", "run", "act")).toBe(false);
+    expect(store.isHaltRequested("wf", "run")).toBe(false);
 
     // Calling clear() again on already-empty state must not throw.
     expect(() => store.clear()).not.toThrow();

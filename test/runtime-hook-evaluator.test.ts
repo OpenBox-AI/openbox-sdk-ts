@@ -113,23 +113,23 @@ describe("OpenBoxRuntime.preflight — BLOCK/HALT", () => {
     ).rejects.toBeInstanceOf(GovernanceBlockedError);
 
     expect(adapter.calls.map((c) => c.kind)).toStrictEqual(["raiseHookBlocked"]);
-    expect(contextStore.isActivityAborted("wf-1", "act-1")).toBe(true);
+    expect(contextStore.isActivityAborted("wf-1", "run-1", "act-1")).toBe(true);
   });
 
-  it("HALT sets contextStore.haltRequested and throws GovernanceHaltError", async () => {
+  it("HALT sets contextStore.isHaltRequested for this run and throws GovernanceHaltError", async () => {
     const fakeCore = new FakeCore().queueEvaluate({ status: 200, body: { verdict: "halt", reason: "kill" } });
     const { runtime, contextStore } = build(fakeCore);
 
     await expect(
       contextStore.activityScope(BOUND_CTX, () => runtime.preflight({ spans: [STARTED_SPAN] }))
     ).rejects.toBeInstanceOf(GovernanceHaltError);
-    expect(contextStore.haltRequested).toBe(true);
+    expect(contextStore.isHaltRequested("wf-1", "run-1")).toBe(true);
   });
 
   it("abort short-circuit: a prior aborted activity blocks WITHOUT another network call", async () => {
     const fakeCore = new FakeCore();
     const { runtime, adapter, contextStore } = build(fakeCore);
-    contextStore.markActivityAborted("wf-1", "act-1");
+    contextStore.markActivityAborted("wf-1", "run-1", "act-1");
 
     await expect(
       contextStore.activityScope(BOUND_CTX, () => runtime.preflight({ spans: [STARTED_SPAN] }))
@@ -180,7 +180,7 @@ describe("OpenBoxRuntime.preflight — fail-open vs fail-closed", () => {
     expect(blockedResult.verdict).toBe(Verdict.HALT);
     expect(blockedResult.fallbackUsed).toBe(true);
     expect(blockedResult.raw["fail_closed_error"]).toContain("core is down");
-    expect(contextStore.isActivityAborted("wf-1", "act-1")).toBe(true);
+    expect(contextStore.isActivityAborted("wf-1", "run-1", "act-1")).toBe(true);
   });
 
   it("a persistent UNSIGNED 401 fails CLOSED regardless of onApiError (never a silent fail-open)", async () => {
@@ -233,7 +233,7 @@ describe("OpenBoxRuntime.completed — never raises, never undoes the operation"
     const result = await contextStore.activityScope(BOUND_CTX, () => runtime.completed({ spans: [COMPLETED_SPAN] }));
 
     expect(result?.verdict).toBe(Verdict.BLOCK);
-    expect(contextStore.isActivityAborted("wf-1", "act-1")).toBe(true);
+    expect(contextStore.isActivityAborted("wf-1", "run-1", "act-1")).toBe(true);
     expect(adapter.calls.map((c) => c.kind)).toStrictEqual(["onCompletedHookResult"]);
   });
 
