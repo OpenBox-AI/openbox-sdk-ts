@@ -11,4 +11,8 @@ paths = [
   '''(^|/)coverage/''',
   '''(^|/)package-lock\.json$''',
   '''(^|/)\.env\.example$''',
+  # Fixture-only RSA keypair for the v2 agent-identity golden fixtures. Owned by
+  # openbox-core/testdata/identity-v2 and synced here. Allowlisted by exact path so no
+  # global rule has to be loosened; the keypair carries an explicit non-production warning.
+  '''(^|/)test/fixtures/identity-v2/keypair\.json$''',
 ]
