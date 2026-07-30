@@ -58,6 +58,7 @@ export class OpenBoxRuntime {
         timeoutSeconds: config.timeoutSeconds,
         onApiError: config.onApiError,
         identity: config.loadIdentity(),
+        oktaIdentity: config.loadOktaIdentity(),
         sdkVersion: config.sdkVersion,
         sdkEngine: config.sdkEngine,
         sdkLanguage: config.sdkLanguage,

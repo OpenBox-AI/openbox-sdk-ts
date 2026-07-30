@@ -84,14 +84,17 @@ describe("identity v2 golden fixtures", () => {
     const segments = fixture.assertion.split(".");
     expect(segments).toHaveLength(3);
 
-    const header = decodeSegment(segments[0]);
+    // `toHaveLength(3)` above already guarantees indices 0/1 are defined;
+    // `noUncheckedIndexedAccess` still types array access as possibly
+    // undefined, so assert what the runtime check already proved.
+    const header = decodeSegment(segments[0]!);
     expect(header.alg).toBe("RS256");
     expect(header.typ).toBe("openbox-agent-proof+jwt");
     expect(header).not.toHaveProperty("jwk");
     expect(header).not.toHaveProperty("jku");
     expect(header).not.toHaveProperty("x5u");
 
-    const claims = decodeSegment(segments[1]);
+    const claims = decodeSegment(segments[1]!);
     for (const claim of REQUIRED_CLAIMS) {
       expect(claims, `missing claim ${claim}`).toHaveProperty(claim);
     }
@@ -119,7 +122,9 @@ describe("identity v2 golden fixtures", () => {
 
   it("transition proof carries the three transition claims", () => {
     const fixture = readFixture<PositiveFixture>("transition-proof.json");
-    const claims = decodeSegment(fixture.assertion.split(".")[1]);
+    const segments = fixture.assertion.split(".");
+    expect(segments).toHaveLength(3);
+    const claims = decodeSegment(segments[1]!);
     expect(claims.obx_transition_purpose).toBeTruthy();
     expect(claims.obx_transition_id).toBeTruthy();
     expect(claims.obx_transition_challenge).toBeTruthy();
@@ -145,6 +150,7 @@ describe("identity v2 golden fixtures", () => {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed.startsWith("#")) continue;
       const [digest, relative] = trimmed.split(/\s+/);
+      if (!digest || !relative) continue;
       recorded.set(relative, digest);
     }
     expect(recorded.size).toBeGreaterThan(0);

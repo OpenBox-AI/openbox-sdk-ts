@@ -17,7 +17,15 @@ import {
   OpenBoxInsecureURLError
 } from "../errors/index.js";
 import { AgentIdentity, validateAgentDid } from "../identity/index.js";
+import { OktaAgentIdentity } from "../identity/okta.js";
 import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identifier.js";
+import type { AgentIdentityMethod } from "../identity/types.js";
+import {
+  describeMutualExclusionConflict,
+  listMissingOktaFields,
+  resolveIdentityMethod,
+  type ResolvedIdentityMethod
+} from "./identity-resolution.js";
 
 // API key format (obx_live_... or obx_test_...). `\w` == [A-Za-z0-9_], matching Python.
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
@@ -120,7 +128,20 @@ const ENV_FIELDS: Record<string, string> = {
   onApiError: "ON_API_ERROR",
   agentName: "AGENT_NAME",
   agentDid: "AGENT_DID",
-  agentPrivateKey: "AGENT_PRIVATE_KEY"
+  agentPrivateKey: "AGENT_PRIVATE_KEY",
+  // Explicit method override (proposal §13.1). Never `legacy_unsigned` — that
+  // remains an inferred-only compatibility classification (rule 6).
+  identityMethod: "AGENT_IDENTITY_METHOD",
+  // New v2 (okta_ai_agent) fields — see identity/types.ts's
+  // OktaAiAgentIdentityConfig for what each maps to.
+  agentId: "AGENT_ID",
+  organizationId: "ORGANIZATION_ID",
+  deploymentId: "DEPLOYMENT_ID",
+  agentProofAudience: "AGENT_PROOF_AUDIENCE",
+  oktaAgentId: "OKTA_AGENT_ID",
+  oktaAgentKeyId: "OKTA_AGENT_KEY_ID",
+  oktaAgentPrivateKey: "OKTA_AGENT_PRIVATE_KEY",
+  oktaAgentAlgorithm: "OKTA_AGENT_ALGORITHM"
 };
 
 /** Settable fields for `resolve()` (excludes the nested-config defaults). */
@@ -132,6 +153,24 @@ export interface OpenBoxConfigInput {
   agentName?: string | null;
   agentDid?: string | null;
   agentPrivateKey?: string | null;
+  /** Explicit method override. Never `legacy_unsigned` (inferred-only). */
+  identityMethod?: AgentIdentityMethod | null;
+  /** OpenBox agent UUID — required for `okta_ai_agent` (`obx_agent_id`). */
+  agentId?: string | null;
+  /** OpenBox organization UUID — required for `okta_ai_agent` (`obx_organization_id`). */
+  organizationId?: string | null;
+  /** Stable deployment identifier — required for `okta_ai_agent` (`obx_deployment_id`). */
+  deploymentId?: string | null;
+  /** Deployment-scoped audience `urn:openbox:<deployment-id>:core` — required for `okta_ai_agent`. */
+  agentProofAudience?: string | null;
+  /** Linked Okta AI Agent's external ID — required for `okta_ai_agent` (`iss`/`sub`). */
+  oktaAgentId?: string | null;
+  /** Selected public credential's `kid` — required for `okta_ai_agent`. */
+  oktaAgentKeyId?: string | null;
+  /** PKCS8 PEM RSA private key — required for `okta_ai_agent`. Never logged. */
+  oktaAgentPrivateKey?: string | null;
+  /** Allowlisted at `"RS256"` only for this release — required for `okta_ai_agent`. */
+  oktaAgentAlgorithm?: string | null;
   sdkVersion?: string | null;
   sdkEngine?: string;
   sdkLanguage?: string;
@@ -158,6 +197,17 @@ export class OpenBoxConfig {
   agentName: string | null = null;
   agentDid: string | null = null;
   agentPrivateKey: string | null = null; // never logged
+  // Explicit method override; null lets DID/Okta field presence infer it.
+  identityMethod: AgentIdentityMethod | null = null;
+  // New v2 (okta_ai_agent) fields — see identity/types.ts's OktaAiAgentIdentityConfig.
+  agentId: string | null = null;
+  organizationId: string | null = null;
+  deploymentId: string | null = null;
+  agentProofAudience: string | null = null;
+  oktaAgentId: string | null = null;
+  oktaAgentKeyId: string | null = null;
+  oktaAgentPrivateKey: string | null = null; // never logged
+  oktaAgentAlgorithm: string | null = null;
   sdkVersion: string | null = null;
   sdkEngine: string = DEFAULT_SDK_ENGINE;
   sdkLanguage: string = DEFAULT_SDK_LANGUAGE;
@@ -247,6 +297,39 @@ export class OpenBoxConfig {
       );
     }
     if (this.agentDid) validateAgentDid(this.agentDid);
+
+    if (
+      this.identityMethod !== null &&
+      this.identityMethod !== "openbox_did" &&
+      this.identityMethod !== "okta_ai_agent"
+    ) {
+      throw new OpenBoxConfigError(
+        `identityMethod must be 'openbox_did' or 'okta_ai_agent' (got ${JSON.stringify(this.identityMethod)}). ` +
+          "'legacy_unsigned' is inferred only, never selectable."
+      );
+    }
+
+    const conflict = describeMutualExclusionConflict(this);
+    if (conflict) throw new OpenBoxConfigError(conflict);
+
+    const method = resolveIdentityMethod(this);
+    if (method === "openbox_did" && !(this.agentDid && this.agentPrivateKey)) {
+      throw new OpenBoxConfigError(
+        "identityMethod is 'openbox_did' but agentDid/agentPrivateKey are not configured."
+      );
+    }
+    if (method === "okta_ai_agent") {
+      const missing = listMissingOktaFields(this);
+      if (missing.length > 0) {
+        throw new OpenBoxConfigError(`Okta agent identity is missing required field(s): ${missing.join(", ")}.`);
+      }
+      if (this.oktaAgentAlgorithm !== "RS256") {
+        throw new OpenBoxConfigError(
+          `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
+        );
+      }
+    }
+
     return this;
   }
 
@@ -256,13 +339,37 @@ export class OpenBoxConfig {
     return AgentIdentity.fromPrivateKey(this.agentDid, this.agentPrivateKey);
   }
 
-  // Redact secrets from structured logging / JSON.stringify. The Ed25519 seed is
-  // non-repudiation key material; a routine `console.log(config)` must not dump it.
+  /** The active method: explicit override, else inferred from DID/Okta field presence. */
+  resolvedIdentityMethod(): ResolvedIdentityMethod {
+    return resolveIdentityMethod(this);
+  }
+
+  /** Load an `OktaAgentIdentity` (or null when the resolved method isn't `okta_ai_agent`). */
+  loadOktaIdentity(): OktaAgentIdentity | null {
+    if (this.resolvedIdentityMethod() !== "okta_ai_agent") return null;
+    // `normalized()` already guaranteed every field below is non-null for this method.
+    return OktaAgentIdentity.fromConfig({
+      method: "okta_ai_agent",
+      openboxAgentId: this.agentId!,
+      organizationId: this.organizationId!,
+      deploymentId: this.deploymentId!,
+      externalAgentId: this.oktaAgentId!,
+      keyId: this.oktaAgentKeyId!,
+      algorithm: "RS256",
+      privateKey: this.oktaAgentPrivateKey!,
+      audience: this.agentProofAudience!
+    });
+  }
+
+  // Redact secrets from structured logging / JSON.stringify. The Ed25519 seed and
+  // the Okta RSA private key are non-repudiation key material; a routine
+  // `console.log(config)` must not dump either.
   private redactedView(): Record<string, unknown> {
     const view: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(this)) view[key] = value;
     view["apiKey"] = this.apiKey ? "[REDACTED]" : this.apiKey;
     view["agentPrivateKey"] = this.agentPrivateKey ? "[REDACTED]" : this.agentPrivateKey;
+    view["oktaAgentPrivateKey"] = this.oktaAgentPrivateKey ? "[REDACTED]" : this.oktaAgentPrivateKey;
     return view;
   }
 
