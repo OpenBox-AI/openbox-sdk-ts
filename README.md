@@ -86,6 +86,60 @@ it covers implementing `FrameworkAdapter`, driving hooks via
 `ContextStore.activityScope`, and a fail-closed pitfall that is easy to
 reintroduce at the wrapper layer.
 
+### Okta AI Agent identity (`okta_ai_agent`)
+
+An agent whose OpenBox identity is verified against an Okta AI Agent credential
+signs every request with an RS256 assertion. That assertion binds seven values
+OpenBox Core already owns, so the runtime does **not** configure them — it fetches
+them from Core after authenticating with its API key:
+
+```dotenv
+OPENBOX_API_URL=https://core.example.com
+OPENBOX_API_KEY=obx_live_...
+OPENBOX_OKTA_AGENT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"
+```
+
+That is the complete configuration. The private key is the only value Core can
+never supply — **OpenBox never receives, stores, or returns it.** Everything else
+(agent id, organization id, deployment id, assertion audience, external Okta agent
+id, credential `kid`, algorithm) comes from `GET /api/v2/auth/bootstrap` on first
+use and is cached in memory for the lifetime of the client.
+
+Before the first governed request the SDK derives its private key's RFC 7638
+public-key thumbprint and compares it with the one Core reports for the agent's
+selected credential. A mismatch fails immediately with actionable guidance rather
+than sending an assertion that could only be rejected:
+
+> The configured private key does not match the selected Okta credential for this
+> OpenBox agent. Export the private key associated with the selected credential,
+> or rotate the agent credential.
+
+**Credential rotation.** Long-running agents can refresh explicitly:
+
+```ts
+const document = await runtime.client.refreshIdentityMetadata();
+console.log(document.okta.credentialKid);
+```
+
+The refresh re-runs the thumbprint check *before* replacing cached metadata, so a
+credential that rotated to a key this process does not hold fails loudly and leaves
+the client on its previous identity. The SDK never refreshes automatically after an
+auth failure: rotation may have selected a new public key while the process still
+holds the old private key, and a silent retry would hide that rather than fix it.
+
+**Requirements.** The key must be a PKCS8 PEM RSA key of at least 2048 bits, and
+its public half must already be registered in Okta for the selected credential.
+
+**Explicit configuration** (every metadata field set locally) remains supported for
+compatibility. The two styles cannot be mixed: a configuration carrying only *some*
+metadata fields is rejected, naming the offending fields, rather than quietly
+merging stale local values over what Core would have supplied. If Core answers
+`404`, the SDK reports that the deployment predates bootstrap and asks you to
+upgrade Core or supply the complete explicit configuration — it never downgrades to
+an unsigned request or to a different identity method.
+
 ### Opt-in Node instrumentation
 
 `initOpenBoxInstrumentation` installs governance patches for `fetch`,

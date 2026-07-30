@@ -21,9 +21,12 @@ import { OktaAgentIdentity } from "../identity/okta.js";
 import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identifier.js";
 import type { AgentIdentityMethod } from "../identity/types.js";
 import {
+  classifyOktaConfigMode,
+  describeMixedOktaConfig,
   describeMutualExclusionConflict,
   listMissingOktaFields,
   resolveIdentityMethod,
+  type OktaConfigMode,
   type ResolvedIdentityMethod
 } from "./identity-resolution.js";
 
@@ -319,14 +322,49 @@ export class OpenBoxConfig {
       );
     }
     if (method === "okta_ai_agent") {
-      const missing = listMissingOktaFields(this);
-      if (missing.length > 0) {
-        throw new OpenBoxConfigError(`Okta agent identity is missing required field(s): ${missing.join(", ")}.`);
-      }
-      if (this.oktaAgentAlgorithm !== "RS256") {
+      // The private key is the one value Core can never supply, in either mode.
+      if (!this.oktaAgentPrivateKey) {
         throw new OpenBoxConfigError(
-          `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
+          "Okta agent identity requires oktaAgentPrivateKey (OPENBOX_OKTA_AGENT_PRIVATE_KEY); " +
+            "OpenBox never holds or returns an agent's private key."
         );
+      }
+
+      switch (classifyOktaConfigMode(this)) {
+        case "mixed":
+          throw new OpenBoxConfigError(describeMixedOktaConfig(this));
+        case "legacy": {
+          // Fully explicit configuration — unchanged from before bootstrap
+          // existed, so an already-deployed runtime keeps working verbatim.
+          const missing = listMissingOktaFields(this);
+          if (missing.length > 0) {
+            throw new OpenBoxConfigError(
+              `Okta agent identity is missing required field(s): ${missing.join(", ")}.`
+            );
+          }
+          if (this.oktaAgentAlgorithm !== "RS256") {
+            throw new OpenBoxConfigError(
+              `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
+            );
+          }
+          break;
+        }
+        case "bootstrap":
+          // Nothing further to validate offline. The remaining checks — key
+          // parsing, RSA size, and the thumbprint match against the selected
+          // credential — need the private key and the network, and belong to the
+          // bootstrap step itself. `normalized()` stays pure and offline, which
+          // is what lets it keep running inside constructors.
+          //
+          // An explicitly set algorithm must still be the allowlisted one, so a
+          // stale `OPENBOX_OKTA_AGENT_ALGORITHM=RS512` fails here rather than
+          // being silently ignored.
+          if (this.oktaAgentAlgorithm !== null && this.oktaAgentAlgorithm !== "RS256") {
+            throw new OpenBoxConfigError(
+              `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
+            );
+          }
+          break;
       }
     }
 
@@ -344,9 +382,37 @@ export class OpenBoxConfig {
     return resolveIdentityMethod(this);
   }
 
-  /** Load an `OktaAgentIdentity` (or null when the resolved method isn't `okta_ai_agent`). */
+  /**
+   * How this config's Okta metadata arrives, or null when the resolved method
+   * isn't `okta_ai_agent`.
+   */
+  oktaConfigMode(): OktaConfigMode | null {
+    if (this.resolvedIdentityMethod() !== "okta_ai_agent") return null;
+    return classifyOktaConfigMode(this);
+  }
+
+  /**
+   * The private key to bootstrap with, or null when this config is not in
+   * bootstrap mode.
+   *
+   * The client uses a non-null result as its signal that it is a v2 client whose
+   * identity is not yet resolved — which is what stops it from silently routing
+   * to v1 while bootstrap is still pending.
+   */
+  oktaBootstrapPrivateKey(): string | null {
+    if (this.oktaConfigMode() !== "bootstrap") return null;
+    return this.oktaAgentPrivateKey;
+  }
+
+  /**
+   * Load an `OktaAgentIdentity`, or null when the resolved method isn't
+   * `okta_ai_agent` OR the config is in bootstrap mode (where the identity
+   * cannot be built until Core supplies its metadata — see
+   * `oktaBootstrapPrivateKey`).
+   */
   loadOktaIdentity(): OktaAgentIdentity | null {
     if (this.resolvedIdentityMethod() !== "okta_ai_agent") return null;
+    if (classifyOktaConfigMode(this) !== "legacy") return null;
     // `normalized()` already guaranteed every field below is non-null for this method.
     return OktaAgentIdentity.fromConfig({
       method: "okta_ai_agent",

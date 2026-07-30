@@ -59,6 +59,12 @@ import type {
 // `recursion-guard.ts` is a dependency-free leaf (only `node:async_hooks`),
 // so this import cannot create a cycle back through `runtime`/`instrumentation`.
 import { runAsInternal } from "../instrumentation/recursion-guard.js";
+import {
+  assertPrivateKeyMatchesDocument,
+  fetchBootstrapDocument,
+  type IdentityBootstrapDocument
+} from "../config/bootstrap.js";
+import { loadRsaPkcs8PrivateKey } from "../identity/okta.js";
 
 // v1 (openbox_did / legacy_unsigned) — unchanged, byte-compatible.
 export const EVALUATE_PATH = "/api/v1/governance/evaluate";
@@ -92,6 +98,18 @@ export interface OpenBoxClientOptions {
    * mutually exclusive with `identity` (contract §1, proposal §13.3).
    */
   oktaIdentity?: OktaAgentIdentity | null;
+  /**
+   * PKCS8 PEM RSA private key for BOOTSTRAP mode: the client fetches the
+   * agent's non-secret identity metadata from
+   * `GET /api/v2/auth/bootstrap` and builds its `oktaIdentity` from the result.
+   *
+   * Mutually exclusive with `oktaIdentity` (that is already-resolved metadata)
+   * and with `identity` (a different method entirely). Supplying this makes the
+   * client a v2 client IMMEDIATELY — before the fetch completes — so a bootstrap
+   * failure can never be mistaken for "no v2 identity configured" and silently
+   * downgrade the request to v1.
+   */
+  oktaBootstrapPrivateKey?: string | null;
   sdkVersion?: string | null;
   sdkEngine?: string;
   sdkLanguage?: string;
@@ -142,7 +160,19 @@ export class OpenBoxClient {
   private readonly timeoutMs: number;
   private readonly onApiError: OnApiError;
   private readonly identity: AgentIdentity | null;
-  private readonly oktaIdentity: OktaAgentIdentity | null;
+  // Not `readonly`: in bootstrap mode this starts null and is populated once
+  // Core's metadata arrives, and is replaced by refreshIdentityMetadata().
+  private oktaIdentity: OktaAgentIdentity | null;
+  private readonly oktaBootstrapPrivateKey: string | null;
+  /**
+   * In-flight bootstrap, shared by concurrent first requests so N simultaneous
+   * calls perform ONE fetch rather than N. Cleared on failure so a later request
+   * can retry a transient outage; never cleared-and-retried automatically within
+   * a single failed attempt.
+   */
+  private bootstrapInFlight: Promise<IdentityBootstrapDocument> | null = null;
+  /** The validated document backing `oktaIdentity`, for `identityMetadata()`. */
+  private bootstrapDocument: IdentityBootstrapDocument | null = null;
   private readonly sdkVersion: string | null;
   private readonly sdkEngine: string | undefined;
   private readonly sdkLanguage: string | undefined;
@@ -166,12 +196,25 @@ export class OpenBoxClient {
         "OpenBoxClient received both a v1 identity and a v2 oktaIdentity; exactly one (or neither) is allowed."
       );
     }
+    if (options.oktaBootstrapPrivateKey && options.oktaIdentity) {
+      throw new OpenBoxConfigError(
+        "OpenBoxClient received both oktaBootstrapPrivateKey and a fully resolved oktaIdentity; " +
+          "supply exactly one — bootstrap mode fetches the metadata that oktaIdentity already carries."
+      );
+    }
+    if (options.oktaBootstrapPrivateKey && options.identity) {
+      throw new OpenBoxConfigError(
+        "OpenBoxClient received both oktaBootstrapPrivateKey (okta_ai_agent) and a v1 identity " +
+          "(openbox_did); exactly one identity method is allowed."
+      );
+    }
     this.apiUrl = apiUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
     this.timeoutMs = Math.round((options.timeoutSeconds ?? 30.0) * 1000);
     this.onApiError = onApiError;
     this.identity = options.identity ?? null;
     this.oktaIdentity = options.oktaIdentity ?? null;
+    this.oktaBootstrapPrivateKey = options.oktaBootstrapPrivateKey ?? null;
     this.sdkVersion = options.sdkVersion ?? null;
     this.sdkEngine = options.sdkEngine;
     this.sdkLanguage = options.sdkLanguage;
@@ -179,29 +222,162 @@ export class OpenBoxClient {
     this.logger = options.logger ?? console;
   }
 
-  /** True when this client is configured for the v2 (`okta_ai_agent`) method. */
+  /**
+   * True when this client is configured for the v2 (`okta_ai_agent`) method.
+   *
+   * Deliberately true while a bootstrap is still pending. Route selection must
+   * not depend on whether the metadata has ARRIVED yet — otherwise an
+   * unreachable Core would turn a v2 client into a v1 one and send an unsigned
+   * request, which no failure is ever permitted to cause.
+   */
   private get isV2(): boolean {
-    return this.oktaIdentity !== null;
+    return this.oktaIdentity !== null || this.oktaBootstrapPrivateKey !== null;
   }
 
-  private prepared(
+  /**
+   * The validated bootstrap document, or null when this client is not in
+   * bootstrap mode or has not bootstrapped yet. Non-secret; safe to log.
+   */
+  identityMetadata(): IdentityBootstrapDocument | null {
+    return this.bootstrapDocument;
+  }
+
+  /**
+   * Re-fetch identity metadata from Core and replace the cached copy.
+   *
+   * For long-running agents whose selected credential changed. The private-key
+   * thumbprint is re-verified BEFORE anything is replaced, so a refresh that
+   * discovers a rotated-away credential throws and leaves the client on its
+   * previous (still self-consistent) identity rather than adopting metadata this
+   * runtime cannot sign for.
+   *
+   * This is explicit on purpose. The client never refreshes automatically after a
+   * signature, binding, or credential error: rotation may have selected a new
+   * public key while this process still holds the old private key, so a blind
+   * refresh-and-replay would hide the real problem and could not repair it.
+   */
+  async refreshIdentityMetadata(): Promise<IdentityBootstrapDocument> {
+    if (this.oktaBootstrapPrivateKey === null) {
+      throw new OpenBoxConfigError(
+        "refreshIdentityMetadata() requires identity bootstrap mode; this client was constructed " +
+          "with explicit Okta identity configuration."
+      );
+    }
+    // Any in-flight first bootstrap is superseded by this explicit refresh.
+    this.bootstrapInFlight = null;
+    // runBootstrap publishes the identity AND the document together, only after
+    // the thumbprint check passes — so there is no window in which
+    // identityMetadata() reports one credential while requests sign with another.
+    const document = await this.runBootstrap(this.oktaBootstrapPrivateKey);
+    return document;
+  }
+
+  /**
+   * Resolve the v2 identity, bootstrapping once if needed.
+   *
+   * Concurrent callers share one in-flight fetch. On failure the shared promise
+   * is cleared so a subsequent request may retry a transient outage — but the
+   * failure itself always propagates to this caller.
+   */
+  private async ensureOktaIdentity(): Promise<OktaAgentIdentity> {
+    if (this.oktaIdentity) return this.oktaIdentity;
+
+    const privateKey = this.oktaBootstrapPrivateKey;
+    if (privateKey === null) {
+      // Unreachable via prepared(), which only calls this when isV2 is true and
+      // oktaIdentity is null — i.e. bootstrap mode.
+      throw new OpenBoxConfigError("No Okta identity is configured for this client.");
+    }
+
+    this.bootstrapInFlight ??= this.runBootstrap(privateKey).catch((e: unknown) => {
+      this.bootstrapInFlight = null;
+      throw e;
+    });
+
+    await this.bootstrapInFlight;
+    // runBootstrap published the identity itself. Re-reading the field rather
+    // than using the resolved value matters when an explicit refresh completed
+    // while this call was waiting: the caller must sign with whatever is current,
+    // never with a superseded identity this promise happens to carry.
+    if (!this.oktaIdentity) {
+      throw new OpenBoxConfigError("Identity bootstrap completed without an identity.");
+    }
+    return this.oktaIdentity;
+  }
+
+  /**
+   * Fetch, validate, thumbprint-check, build the identity, and publish it.
+   *
+   * Order matters: the local key is parsed and size-checked first (a malformed
+   * or undersized key fails without a network round trip), then the document is
+   * fetched and structurally validated, then the thumbprint is compared. Only
+   * after ALL of that are `oktaIdentity` and `bootstrapDocument` published —
+   * together, in one synchronous step, so no observer can ever see the document
+   * from one credential alongside the signing key of another.
+   */
+  private async runBootstrap(privateKeyPem: string): Promise<IdentityBootstrapDocument> {
+    // Fails locally, before any request, on a malformed / non-RSA / undersized key.
+    loadRsaPkcs8PrivateKey(privateKeyPem);
+
+    const document = await runAsInternal(() =>
+      fetchBootstrapDocument({
+        apiUrl: this.apiUrl,
+        apiKey: this.apiKey,
+        fetchImpl: this.fetchImpl,
+        timeoutMs: this.timeoutMs,
+        sdkVersion: this.sdkVersion,
+        ...(this.sdkEngine !== undefined ? { sdkEngine: this.sdkEngine } : {}),
+        ...(this.sdkLanguage !== undefined ? { sdkLanguage: this.sdkLanguage } : {})
+      })
+    );
+
+    // Throws on mismatch — no governed request is ever sent after this point.
+    assertPrivateKeyMatchesDocument(privateKeyPem, document);
+
+    const identity = OktaAgentIdentity.fromConfig({
+      method: "okta_ai_agent",
+      openboxAgentId: document.openboxAgentId,
+      organizationId: document.organizationId,
+      deploymentId: document.deploymentId,
+      externalAgentId: document.okta.externalAgentId,
+      keyId: document.okta.credentialKid,
+      algorithm: "RS256",
+      privateKey: privateKeyPem,
+      audience: document.assertionAudience
+    });
+
+    // Published together — see this method's doc comment.
+    this.oktaIdentity = identity;
+    this.bootstrapDocument = document;
+    this.logger.info(
+      `OpenBox identity bootstrap succeeded (version ${document.bootstrapVersion}, ` +
+        `agent ${document.openboxAgentId}, kid ${document.okta.credentialKid}, thumbprint matched)`
+    );
+    return document;
+  }
+
+  private async prepared(
     method: string,
     path: string,
     payload: unknown
-  ): { url: string; headers: Record<string, string>; body: Buffer } {
+  ): Promise<{ url: string; headers: Record<string, string>; body: Buffer }> {
     const sdkOptions = {
       apiKey: this.apiKey,
       sdkVersion: this.sdkVersion,
       ...(this.sdkEngine !== undefined ? { sdkEngine: this.sdkEngine } : {}),
       ...(this.sdkLanguage !== undefined ? { sdkLanguage: this.sdkLanguage } : {})
     };
+    // In bootstrap mode the identity is resolved here, on the first request that
+    // needs it. This await is the only thing standing between an unresolved v2
+    // client and a request; it throws rather than proceeding unsigned.
+    const oktaIdentity = this.isV2 ? await this.ensureOktaIdentity() : null;
     // v2 sends ONLY X-OpenBox-Agent-Assertion + the base auth headers — never
     // v1 DID identity headers as a fallback (contract §2.1, proposal §13.4
     // step 11). Selecting `prepareOktaSignedRequest` here instead of
     // `prepareSignedRequest` is what guarantees that: the two functions build
     // disjoint header sets and this branch calls exactly one.
-    const { headers, body } = this.oktaIdentity
-      ? prepareOktaSignedRequest(method, path, payload, { ...sdkOptions, identity: this.oktaIdentity })
+    const { headers, body } = oktaIdentity
+      ? prepareOktaSignedRequest(method, path, payload, { ...sdkOptions, identity: oktaIdentity })
       : prepareSignedRequest(method, path, payload, { ...sdkOptions, identity: this.identity });
     return { url: `${this.apiUrl}${path}`, headers, body };
   }
@@ -214,7 +390,7 @@ export class OpenBoxClient {
    * (never fail-opens) — see the class docstring.
    */
   async evaluate(payload: JsonValue): Promise<EvaluationResult> {
-    const { url, headers, body } = this.prepared(
+    const { url, headers, body } = await this.prepared(
       "POST",
       this.isV2 ? EVALUATE_PATH_V2 : EVALUATE_PATH,
       payload
@@ -313,7 +489,7 @@ export class OpenBoxClient {
     signal?: AbortSignal
   ): Promise<ApprovalResult | null> {
     const payload = { workflow_id: workflowId, run_id: runId, activity_id: activityId };
-    const { url, headers, body } = this.prepared(
+    const { url, headers, body } = await this.prepared(
       "POST",
       this.isV2 ? APPROVAL_PATH_V2 : APPROVAL_PATH,
       payload
@@ -368,7 +544,7 @@ export class OpenBoxClient {
    * OpenBoxNetworkError on connectivity failure.
    */
   async validateApiKey(): Promise<boolean> {
-    const { url, headers } = this.prepared(
+    const { url, headers } = await this.prepared(
       "GET",
       this.isV2 ? AUTH_VALIDATE_PATH_V2 : AUTH_VALIDATE_PATH,
       null
@@ -408,14 +584,20 @@ export class OpenBoxClient {
    * client must not call /api/v1/handoffs."
    */
   async sendHandoff(toAgentId: string, options: HandoffOptions = {}): Promise<HandoffResult> {
-    if (this.identity === null && this.oktaIdentity === null) {
+    // `!this.isV2`, never `this.oktaIdentity === null`: in bootstrap mode the
+    // Okta identity is not resolved until the first request needs it, so
+    // testing the resolved field here would reject a correctly configured
+    // okta_ai_agent client whose first call happens to be a handoff — and
+    // would tell the operator to provision an identity they already have.
+    // Route selection on the next line already uses isV2 for exactly this reason.
+    if (this.identity === null && !this.isV2) {
       throw new OpenBoxConfigError(
         "Cannot send a source-authenticated handoff in unsigned (legacy_unsigned) mode: " +
           "provision an OpenBox DID or Okta AI Agent identity first."
       );
     }
     const path = this.isV2 ? HANDOFF_PATH_V2 : HANDOFF_PATH_V1;
-    const { url, headers, body } = this.prepared("POST", path, buildHandoffRequestBody(toAgentId, options));
+    const { url, headers, body } = await this.prepared("POST", path, buildHandoffRequestBody(toAgentId, options));
     let response: Response;
     try {
       response = await runAsInternal(() =>

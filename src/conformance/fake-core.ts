@@ -12,6 +12,7 @@
 const EVALUATE_SUFFIX = "/governance/evaluate";
 const APPROVAL_SUFFIX = "/governance/approval";
 const AUTH_VALIDATE_SUFFIX = "/auth/validate";
+const AUTH_BOOTSTRAP_SUFFIX = "/auth/bootstrap";
 
 export interface CapturedRequest {
   readonly method: string;
@@ -83,10 +84,12 @@ export class FakeCore {
   readonly evaluateRequests: CapturedRequest[] = [];
   readonly approvalRequests: CapturedRequest[] = [];
   readonly authRequests: CapturedRequest[] = [];
+  readonly bootstrapRequests: CapturedRequest[] = [];
 
   private readonly evaluateQueue: ScriptedResponse[] = [];
   private readonly approvalQueue: ScriptedResponse[] = [];
   private readonly authQueue: ScriptedResponse[] = [];
+  private readonly bootstrapQueue: ScriptedResponse[] = [];
   private approvalNetworkErrorMessage: string | null = null;
 
   /** Queue evaluate responses, popped FIFO; an empty queue answers `{verdict:"allow"}`. */
@@ -103,6 +106,19 @@ export class FakeCore {
 
   queueAuth(...responses: readonly ScriptedResponse[]): this {
     this.authQueue.push(...responses);
+    return this;
+  }
+
+  /**
+   * Queue `GET /api/v2/auth/bootstrap` responses, popped FIFO.
+   *
+   * An empty queue answers 404, matching a Core deployment that predates the
+   * bootstrap endpoint — the conservative default, since it makes a scenario that
+   * forgot to script bootstrap fail loudly instead of silently succeeding with
+   * metadata no real Core returned.
+   */
+  queueBootstrap(...responses: readonly ScriptedResponse[]): this {
+    this.bootstrapQueue.push(...responses);
     return this;
   }
 
@@ -170,6 +186,17 @@ export class FakeCore {
       }
       return Promise.resolve(
         this.respond(this.approvalQueue, { status: 200, body: { action: "allow" } })
+      );
+    }
+    // Checked BEFORE /auth/validate: both live under /auth/, and an
+    // endsWith test on the wrong one first would misroute.
+    if (url.pathname.endsWith(AUTH_BOOTSTRAP_SUFFIX)) {
+      this.bootstrapRequests.push(captured);
+      return Promise.resolve(
+        this.respond(this.bootstrapQueue, {
+          status: 404,
+          body: { code: 404, message: "not found" }
+        })
       );
     }
     if (url.pathname.endsWith(AUTH_VALIDATE_SUFFIX)) {

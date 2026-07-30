@@ -58,7 +58,11 @@ export class OpenBoxRuntime {
         timeoutSeconds: config.timeoutSeconds,
         onApiError: config.onApiError,
         identity: config.loadIdentity(),
+        // Exactly one of these is ever non-null: loadOktaIdentity() returns an
+        // identity only for fully explicit (legacy) Okta config, and
+        // oktaBootstrapPrivateKey() returns a key only in bootstrap mode.
         oktaIdentity: config.loadOktaIdentity(),
+        oktaBootstrapPrivateKey: config.oktaBootstrapPrivateKey(),
         sdkVersion: config.sdkVersion,
         sdkEngine: config.sdkEngine,
         sdkLanguage: config.sdkLanguage,
