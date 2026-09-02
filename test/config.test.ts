@@ -55,6 +55,37 @@ describe("OpenBoxConfig.normalized — validation", () => {
     expect(resolve({ apiUrl: "https://x.com", apiKey: "obx_live_abc" }).apiKey).toBe("obx_live_abc");
   });
 
+  it("accepts an OpenShell provider placeholder for its bound local endpoint", () => {
+    const apiKey = "openshell:resolve:env:OPENBOX_API_KEY";
+    const config = resolve({
+      apiUrl: "http://host.openshell.internal:8086",
+      apiKey
+    });
+
+    expect(config.apiKey).toBe(apiKey);
+    expect(config.apiUrl).toBe("http://host.openshell.internal:8086");
+  });
+
+  it("accepts an OpenShell revision-scoped provider placeholder", () => {
+    const apiKey = "openshell:resolve:env:v12_OPENBOX_API_KEY";
+
+    expect(resolve({
+      apiUrl: "http://host.openshell.internal:8086",
+      apiKey
+    }).apiKey).toBe(apiKey);
+  });
+
+  it("does not treat other placeholders or ordinary keys as OpenShell endpoint authorization", () => {
+    expect(() => resolve({
+      apiUrl: "http://host.openshell.internal:8086",
+      apiKey: "openshell:resolve:env:OTHER_API_KEY"
+    })).toThrow(OpenBoxInsecureURLError);
+    expect(() => resolve({
+      apiUrl: "http://host.openshell.internal:8086",
+      apiKey: "obx_test_k"
+    })).toThrow(OpenBoxInsecureURLError);
+  });
+
   it("accepts the fail_closed_destructive outage policy", () => {
     expect(
       resolve({ apiUrl: "https://x.com", apiKey: "obx_test_k", onApiError: "fail_closed_destructive" })

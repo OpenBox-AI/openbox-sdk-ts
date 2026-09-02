@@ -64,7 +64,7 @@ import { Verdict, workflowStarted } from "@openbox-ai/openbox-sdk-ts";
 
 const config = OpenBoxConfig.resolve({
   apiUrl: "https://core.openbox.ai",
-  apiKey: process.env.OPENBOX_API_KEY! // "obx_live_..." or "obx_test_..."
+  apiKey: process.env.OPENBOX_API_KEY! // OpenBox key or OpenShell provider placeholder
 });
 
 const runtime = new OpenBoxRuntime(config);
@@ -79,6 +79,13 @@ console.log(result.verdict); // e.g. Verdict.ALLOW
 
 runtime.close();
 ```
+
+For a local NVIDIA OpenShell sandbox, the SDK also accepts the exact
+`openshell:resolve:env:OPENBOX_API_KEY` placeholder (including OpenShell's
+revision-scoped form) with `http://host.openshell.internal:<port>`. OpenShell
+must bind that provider to the Core REST endpoint and performs the real bearer
+credential rewrite at egress. This does not allow ordinary keys or other
+non-localhost HTTP endpoints.
 
 Building a framework adapter rather than calling the SDK directly? Read
 [`docs/framework-adapter-guide.md`](docs/framework-adapter-guide.md) first —

@@ -21,6 +21,12 @@ import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identi
 
 // API key format (obx_live_... or obx_test_...). `\w` == [A-Za-z0-9_], matching Python.
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
+// OpenShell deliberately exposes only this provider placeholder to the sandbox
+// process. The egress proxy replaces it with the real key at the endpoint bound
+// by sandbox policy. Revision-scoped placeholders use OpenShell's reserved
+// `v<digits>_` namespace.
+const OPENSHELL_API_KEY_PLACEHOLDER_PATTERN =
+  /^openshell:resolve:env:(?:v\d+_)?OPENBOX_API_KEY$/;
 const GLOBAL_ENV_PREFIX = "OPENBOX";
 
 /**
@@ -208,9 +214,9 @@ export class OpenBoxConfig {
     if (!this.apiKey) throw new OpenBoxConfigError("apiKey is required");
 
     this.apiUrl = String(this.apiUrl).replace(/\/+$/, "");
-    validateUrlSecurity(this.apiUrl);
+    validateUrlSecurity(this.apiUrl, this.apiKey);
 
-    if (!API_KEY_PATTERN.test(this.apiKey)) {
+    if (!isValidApiKey(this.apiKey)) {
       throw new OpenBoxAuthError(
         `Invalid API key format. Expected 'obx_live_*' or 'obx_test_*', got: '${this.apiKey.slice(0, 15)}...' (showing first 15 chars)`
       );
@@ -276,13 +282,16 @@ export class OpenBoxConfig {
 }
 
 /**
- * HTTPS required for non-localhost URLs (protects API keys in transit).
+ * HTTPS required for non-localhost URLs, except the provider-brokered local
+ * OpenShell bridge (protects ordinary API keys in transit).
  *
  * Parses with the WHATWG URL, reads `hostname`, strips IPv6 brackets
  * (`[::1]`→`::1`), and exact-matches the localhost set. Never uses
  * substring/startsWith — `localhost.evil.com` / `127.0.0.1.evil` are NOT local.
+ * The OpenShell exception requires both its exact internal hostname and its
+ * exact OpenBox credential placeholder.
  */
-function validateUrlSecurity(apiUrl: string): void {
+function validateUrlSecurity(apiUrl: string, apiKey: string): void {
   let url: URL;
   try {
     url = new URL(apiUrl);
@@ -291,9 +300,16 @@ function validateUrlSecurity(apiUrl: string): void {
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  if (url.protocol === "http:" && !isLocalhost) {
+  const isOpenShellBoundEndpoint =
+    hostname === "host.openshell.internal" &&
+    OPENSHELL_API_KEY_PLACEHOLDER_PATTERN.test(apiKey);
+  if (url.protocol === "http:" && !isLocalhost && !isOpenShellBoundEndpoint) {
     throw new OpenBoxInsecureURLError(
       `Insecure HTTP URL detected: ${apiUrl}. Use HTTPS for non-localhost URLs to protect API keys in transit.`
     );
   }
+}
+
+function isValidApiKey(apiKey: string): boolean {
+  return API_KEY_PATTERN.test(apiKey) || OPENSHELL_API_KEY_PLACEHOLDER_PATTERN.test(apiKey);
 }
