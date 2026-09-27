@@ -19,6 +19,7 @@ import { OpenBoxConfigError, OpenBoxNetworkError } from "../errors/index.js";
 import { buildAuthHeaders } from "../identity/index.js";
 import { jwkThumbprintSha256, thumbprintsMatch } from "../identity/jwk-thumbprint.js";
 import { loadRsaPkcs8PrivateKey } from "../identity/okta.js";
+import { trimTrailingSlashes } from "./url-security.js";
 
 /** `GET /api/v2/auth/bootstrap`. */
 export const AUTH_BOOTSTRAP_PATH_V2 = "/api/v2/auth/bootstrap";
@@ -245,7 +246,7 @@ export interface FetchBootstrapOptions {
 export async function fetchBootstrapDocument(
   options: FetchBootstrapOptions
 ): Promise<IdentityBootstrapDocument> {
-  const url = `${options.apiUrl.replace(/\/+$/, "")}${AUTH_BOOTSTRAP_PATH_V2}`;
+  const url = `${trimTrailingSlashes(options.apiUrl)}${AUTH_BOOTSTRAP_PATH_V2}`;
   const headers = {
     ...buildAuthHeaders(options.apiKey, options.sdkVersion ?? null, {
       ...(options.sdkEngine !== undefined ? { sdkEngine: options.sdkEngine } : {}),

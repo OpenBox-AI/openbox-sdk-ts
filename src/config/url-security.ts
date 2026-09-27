@@ -1,7 +1,8 @@
 /**
- * Transport-security rule for the OpenBox Core URL, shared by config
- * normalization and the v3 client (which enforces it even for configs
- * resolved with `validate: false`, since it sends a reusable workload token).
+ * Core URL helpers shared by config normalization and the client: the
+ * transport-security rule (which the v3 client enforces even for configs
+ * resolved with `validate: false`, since it sends a reusable workload token)
+ * and trailing-slash trimming.
  *
  * Pure leaf module: no crypto/network imports.
  */
@@ -29,4 +30,14 @@ export function validateUrlSecurity(apiUrl: string): void {
       `Insecure HTTP URL detected: ${apiUrl}. Use HTTPS for non-localhost URLs to protect API keys in transit.`
     );
   }
+}
+
+/**
+ * Remove every trailing `/` — the same result as `value.replace(/\/+$/, "")`,
+ * computed with a linear scan instead of a backtracking regex.
+ */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
 }

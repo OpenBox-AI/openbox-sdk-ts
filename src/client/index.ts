@@ -44,7 +44,7 @@ import type {
 } from "../identity/types.js";
 import { WORKLOAD_TOKEN_HEADER } from "../identity/workload.js";
 import type { OnApiError, OpenBoxConfig } from "../config/index.js";
-import { validateUrlSecurity } from "../config/url-security.js";
+import { trimTrailingSlashes, validateUrlSecurity } from "../config/url-security.js";
 import { serializeBody } from "../serialization/index.js";
 import { AuthStateCoordinator } from "./auth-state-coordinator.js";
 import { buildHandoffRequestBody, parseHandoffResponse } from "./handoff.js";
@@ -156,7 +156,16 @@ function clientClosedError(): OpenBoxConfigError {
  * construction, before it could reach a log or error message.
  */
 function isHeaderSafe(value: string): boolean {
-  return !/[\r\n\0]/.test(value.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, ""));
+  // Linear scan (no backtracking regex): skip surrounding HTTP whitespace, then
+  // look for a line break or NUL in what remains.
+  const isHttpWhitespace = (char: string | undefined): boolean =>
+    char === "\t" || char === "\n" || char === "\r" || char === " ";
+  let start = 0;
+  let end = value.length;
+  while (start < end && isHttpWhitespace(value[start])) start += 1;
+  while (end > start && isHttpWhitespace(value[end - 1])) end -= 1;
+  const inner = value.slice(start, end);
+  return !inner.includes("\r") && !inner.includes("\n") && !inner.includes("\0");
 }
 
 /**
@@ -322,7 +331,7 @@ export class OpenBoxClient {
     if (workloadPrivateKey !== null) {
       // A reusable workload token (and the API key) must never travel in
       // cleartext, even when config normalization was skipped (`validate: false`).
-      validateUrlSecurity(apiUrl.replace(/\/+$/, ""));
+      validateUrlSecurity(apiUrl);
       const conflicting = [
         options.identity ? "identity (openbox_did)" : null,
         options.oktaIdentity ? "oktaIdentity (okta_ai_agent)" : null,
@@ -335,7 +344,7 @@ export class OpenBoxClient {
         );
       }
     }
-    this.apiUrl = apiUrl.replace(/\/+$/, "");
+    this.apiUrl = trimTrailingSlashes(apiUrl);
     this.apiKey = apiKey;
     this.timeoutMs = Math.round((options.timeoutSeconds ?? 30.0) * 1000);
     this.onApiError = onApiError;

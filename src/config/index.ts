@@ -27,7 +27,7 @@ import {
   type OktaConfigMode,
   type ResolvedIdentityMethod
 } from "./identity-resolution.js";
-import { validateUrlSecurity } from "./url-security.js";
+import { trimTrailingSlashes, validateUrlSecurity } from "./url-security.js";
 
 // API key format (obx_live_... or obx_test_...). `\w` == [A-Za-z0-9_], matching Python.
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
@@ -268,7 +268,7 @@ export class OpenBoxConfig {
     if (!this.apiUrl) throw new OpenBoxConfigError("apiUrl is required");
     if (!this.apiKey) throw new OpenBoxConfigError("apiKey is required");
 
-    this.apiUrl = String(this.apiUrl).replace(/\/+$/, "");
+    this.apiUrl = trimTrailingSlashes(String(this.apiUrl));
     validateUrlSecurity(this.apiUrl);
 
     if (!API_KEY_PATTERN.test(this.apiKey)) {
