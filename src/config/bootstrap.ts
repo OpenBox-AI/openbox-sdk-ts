@@ -29,6 +29,24 @@ export const AUTH_BOOTSTRAP_PATH_V2 = "/api/v2/auth/bootstrap";
  */
 export const SUPPORTED_BOOTSTRAP_VERSION = 1;
 
+/**
+ * Provider-neutral, non-secret active-authority metadata (IAM v3 addition to
+ * the still-version-1 document). Core resolves the active assignment, provider
+ * generation, selected identity, and credential before returning it; the SDK
+ * cannot prove the snapshot is still current — Core re-resolves authority when
+ * verifying each governed request.
+ */
+export interface IdentityBootstrapAuthority {
+  readonly assignmentId: string;
+  readonly providerGenerationId: string;
+  readonly generationNumber: number;
+  readonly activationVersion: string;
+  readonly identityId: string;
+  readonly credentialId: string;
+  /** Opaque projection version — not a UUID. */
+  readonly projectionVersion: string;
+}
+
 /** The okta_ai_agent half of the bootstrap document. */
 export interface IdentityBootstrapOkta {
   readonly externalAgentId: string;
@@ -45,6 +63,8 @@ export interface IdentityBootstrapDocument {
   readonly organizationId: string;
   readonly deploymentId: string;
   readonly assertionAudience: string;
+  /** Required: a document without it fails closed, even though the version is still 1. */
+  readonly authority: IdentityBootstrapAuthority;
   readonly okta: IdentityBootstrapOkta;
 }
 
@@ -71,6 +91,54 @@ function requireString(source: Record<string, unknown>, key: string, path: strin
   return value;
 }
 
+// Core's authority identifiers are uuid.UUID values; projection version and
+// organization id are opaque strings and are not held to a UUID shape.
+const AUTHORITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function requireAuthorityUuid(source: Record<string, unknown>, key: string): string {
+  const value = requireString(source, key, `authority.${key}`);
+  if (!AUTHORITY_UUID_PATTERN.test(value)) {
+    throw new OpenBoxConfigError(
+      `Identity bootstrap response is invalid: 'authority.${key}' must be a UUID.`
+    );
+  }
+  return value;
+}
+
+/**
+ * Parse the required `authority` object. Older Core deployments that predate
+ * it are incompatible with this SDK — upgrade Core, or configure the complete
+ * explicit Okta identity (which needs no bootstrap).
+ */
+function parseAuthority(raw: unknown): IdentityBootstrapAuthority {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new OpenBoxConfigError(
+      "Identity bootstrap response is invalid: 'authority' must be an object. This Core deployment " +
+        "predates IAM-aware bootstrap; upgrade Core, or supply the complete explicit Okta identity configuration."
+    );
+  }
+  const authority = raw as Record<string, unknown>;
+  const generationNumber = authority["generation_number"];
+  if (
+    typeof generationNumber !== "number" ||
+    !Number.isSafeInteger(generationNumber) ||
+    generationNumber < 1
+  ) {
+    throw new OpenBoxConfigError(
+      "Identity bootstrap response is invalid: 'authority.generation_number' must be a positive integer."
+    );
+  }
+  return {
+    assignmentId: requireAuthorityUuid(authority, "assignment_id"),
+    providerGenerationId: requireAuthorityUuid(authority, "provider_generation_id"),
+    generationNumber,
+    activationVersion: requireAuthorityUuid(authority, "activation_version"),
+    identityId: requireAuthorityUuid(authority, "identity_id"),
+    credentialId: requireAuthorityUuid(authority, "credential_id"),
+    projectionVersion: requireString(authority, "projection_version", "authority.projection_version")
+  };
+}
+
 /**
  * Parse and strictly validate a bootstrap response body.
  *
@@ -80,7 +148,7 @@ function requireString(source: Record<string, unknown>, key: string, path: strin
  * explanation.
  */
 export function parseBootstrapDocument(raw: unknown): IdentityBootstrapDocument {
-  if (typeof raw !== "object" || raw === null) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new OpenBoxConfigError("Identity bootstrap response is invalid: expected a JSON object.");
   }
   const body = raw as Record<string, unknown>;
@@ -121,6 +189,7 @@ export function parseBootstrapDocument(raw: unknown): IdentityBootstrapDocument 
     organizationId: requireString(body, "organization_id", "organization_id"),
     deploymentId: requireString(body, "deployment_id", "deployment_id"),
     assertionAudience: requireString(body, "assertion_audience", "assertion_audience"),
+    authority: parseAuthority(body["authority"]),
     okta: {
       externalAgentId: requireString(okta, "external_agent_id", "okta.external_agent_id"),
       credentialKid: requireString(okta, "credential_kid", "okta.credential_kid"),

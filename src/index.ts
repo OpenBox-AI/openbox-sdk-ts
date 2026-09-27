@@ -35,6 +35,18 @@ export * from "./contracts/context.js";
 
 // Error hierarchy (pure).
 export * from "./errors/index.js";
+// IAM v3 workload-authentication error (pure; extends OpenBoxAuthError).
+export * from "./errors/workload.js";
+
+// Identity configuration shapes (types only — erased at runtime).
+export type {
+  AgentIdentityMethod,
+  AgentIdentityTransitionCandidate,
+  AgentIdentityVerification,
+  KeycloakWorkloadIdentityConfig,
+  OktaAiAgentIdentityConfig,
+  OpenBoxDidIdentityConfig
+} from "./identity/types.js";
 
 // Always-strict validation gate helpers (pure — validate/stamp/strip/finalize
 // + raiseForVerdict; does NOT call the network client itself — see

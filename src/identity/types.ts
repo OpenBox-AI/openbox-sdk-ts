@@ -1,5 +1,6 @@
 /**
- * Tagged agent-identity configuration shapes (proposal §13.1, contract §1).
+ * Tagged agent-identity configuration shapes (proposal §13.1, contract §1,
+ * IAM v3 workload identity).
  *
  * Pure type module — no crypto/network imports — shared by config parsing,
  * client endpoint/signing selection, and the transition preflight helpers.
@@ -46,15 +47,33 @@ export interface OktaAiAgentIdentityConfig {
   readonly audience: string;
 }
 
-/** Discriminated union of the two selectable verification methods. */
-export type AgentIdentityVerification = OpenBoxDidIdentityConfig | OktaAiAgentIdentityConfig;
+/**
+ * IAM v3 Keycloak workload identity. The OpenBox API key still resolves the
+ * stable agent; this RSA key authenticates the agent's active Keycloak service
+ * account (`private_key_jwt`) to obtain a short-lived workload token. Every
+ * other value — client id, key id, issuer, audience, activation — comes from
+ * Core's `GET /api/v3/auth/bootstrap`, never from local configuration.
+ */
+export interface KeycloakWorkloadIdentityConfig {
+  readonly method: "keycloak_workload";
+  /** PKCS8 PEM-encoded RSA private key (>= 2048-bit modulus). Never logged, never echoed. */
+  readonly privateKey: string;
+}
+
+/** Discriminated union of the selectable verification methods. */
+export type AgentIdentityVerification =
+  | OpenBoxDidIdentityConfig
+  | OktaAiAgentIdentityConfig
+  | KeycloakWorkloadIdentityConfig;
 
 /** The subset of `method` values a caller may explicitly select (excludes `legacy_unsigned`). */
 export type AgentIdentityMethod = AgentIdentityVerification["method"];
 
 /**
- * Candidate identity for a transition preflight (proposal §13.5). Same tagged
- * shape as `AgentIdentityVerification` — kept as a distinct alias so call
- * sites read as "the explicit candidate", never "the active identity".
+ * Candidate identity for a v1/v2 transition preflight (proposal §13.5). Kept as
+ * a distinct alias so call sites read as "the explicit candidate", never "the
+ * active identity". Deliberately limited to the DID and Okta variants: a
+ * workload candidate is proved through `proveWorkloadIdentityTransition`, which
+ * takes only a candidate key because Core supplies the candidate's metadata.
  */
-export type AgentIdentityTransitionCandidate = AgentIdentityVerification;
+export type AgentIdentityTransitionCandidate = OpenBoxDidIdentityConfig | OktaAiAgentIdentityConfig;

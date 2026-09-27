@@ -121,9 +121,11 @@ export interface OpenBoxInstrumentationController {
    * last fs event. Non-breaking, idempotent, and safe when sync fs was never
    * installed (resolves immediately). Never throws for telemetry failures.
    *
-   * Durability is bounded by the Core client's `timeoutSeconds` (default 30s):
-   * each pending `runtime.completed(...)` settles by send or client timeout, so
-   * `flush()` cannot hang longer than that per in-flight event.
+   * Durability is bounded by the Core client's `timeoutSeconds` (default 30s)
+   * per request: each pending `runtime.completed(...)` settles by send or client
+   * timeout. A `keycloak_workload` client may first need to acquire a workload
+   * token (bootstrap + token exchange, each bounded the same way), so one
+   * in-flight event can take up to about three times `timeoutSeconds`.
    */
   flush(): Promise<void>;
   /** Restore every patched target. Idempotent and concurrency-safe (see module docstring). */

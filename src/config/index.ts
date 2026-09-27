@@ -11,11 +11,7 @@
  * Env access happens only inside `resolve()`, never at import time.
  */
 
-import {
-  OpenBoxAuthError,
-  OpenBoxConfigError,
-  OpenBoxInsecureURLError
-} from "../errors/index.js";
+import { OpenBoxAuthError, OpenBoxConfigError } from "../errors/index.js";
 import { AgentIdentity, validateAgentDid } from "../identity/index.js";
 import { OktaAgentIdentity } from "../identity/okta.js";
 import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identifier.js";
@@ -24,11 +20,14 @@ import {
   classifyOktaConfigMode,
   describeMixedOktaConfig,
   describeMutualExclusionConflict,
+  describeWorkloadConflict,
   listMissingOktaFields,
   resolveIdentityMethod,
+  resolveWorkloadPrivateKey,
   type OktaConfigMode,
   type ResolvedIdentityMethod
 } from "./identity-resolution.js";
+import { validateUrlSecurity } from "./url-security.js";
 
 // API key format (obx_live_... or obx_test_...). `\w` == [A-Za-z0-9_], matching Python.
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
@@ -144,7 +143,9 @@ const ENV_FIELDS: Record<string, string> = {
   oktaAgentId: "OKTA_AGENT_ID",
   oktaAgentKeyId: "OKTA_AGENT_KEY_ID",
   oktaAgentPrivateKey: "OKTA_AGENT_PRIVATE_KEY",
-  oktaAgentAlgorithm: "OKTA_AGENT_ALGORITHM"
+  oktaAgentAlgorithm: "OKTA_AGENT_ALGORITHM",
+  // IAM v3 (keycloak_workload): the one local secret workload mode needs.
+  workloadPrivateKey: "WORKLOAD_PRIVATE_KEY"
 };
 
 /** Settable fields for `resolve()` (excludes the nested-config defaults). */
@@ -174,6 +175,12 @@ export interface OpenBoxConfigInput {
   oktaAgentPrivateKey?: string | null;
   /** Allowlisted at `"RS256"` only for this release — required for `okta_ai_agent`. */
   oktaAgentAlgorithm?: string | null;
+  /**
+   * PKCS8 PEM RSA private key of the agent's active Keycloak service account —
+   * selects `keycloak_workload` (IAM v3). Never logged. Core supplies every
+   * other workload value; there is no local issuer/client-id/audience setting.
+   */
+  workloadPrivateKey?: string | null;
   sdkVersion?: string | null;
   sdkEngine?: string;
   sdkLanguage?: string;
@@ -211,6 +218,7 @@ export class OpenBoxConfig {
   oktaAgentKeyId: string | null = null;
   oktaAgentPrivateKey: string | null = null; // never logged
   oktaAgentAlgorithm: string | null = null;
+  workloadPrivateKey: string | null = null; // never logged
   sdkVersion: string | null = null;
   sdkEngine: string = DEFAULT_SDK_ENGINE;
   sdkLanguage: string = DEFAULT_SDK_LANGUAGE;
@@ -292,6 +300,19 @@ export class OpenBoxConfig {
       );
     }
 
+    this.validateIdentity();
+    return this;
+  }
+
+  /**
+   * Validate the identity configuration — pure and offline, no key parsing or
+   * network. `normalized()` runs it, and `OpenBoxClient.fromConfig` runs it
+   * again, so a config resolved with `validate: false` may skip URL/API-key
+   * normalization but can never skip identity-mode exclusivity. Key parsing
+   * happens when the client is constructed; bootstrap and token acquisition on
+   * the first governed call.
+   */
+  validateIdentity(): void {
     // DID + private key: both-or-neither; format-validate the DID eagerly.
     if (Boolean(this.agentDid) !== Boolean(this.agentPrivateKey)) {
       throw new OpenBoxConfigError(
@@ -304,15 +325,16 @@ export class OpenBoxConfig {
     if (
       this.identityMethod !== null &&
       this.identityMethod !== "openbox_did" &&
-      this.identityMethod !== "okta_ai_agent"
+      this.identityMethod !== "okta_ai_agent" &&
+      this.identityMethod !== "keycloak_workload"
     ) {
       throw new OpenBoxConfigError(
-        `identityMethod must be 'openbox_did' or 'okta_ai_agent' (got ${JSON.stringify(this.identityMethod)}). ` +
-          "'legacy_unsigned' is inferred only, never selectable."
+        `identityMethod must be 'openbox_did', 'okta_ai_agent', or 'keycloak_workload' ` +
+          `(got ${JSON.stringify(this.identityMethod)}). 'legacy_unsigned' is inferred only, never selectable.`
       );
     }
 
-    const conflict = describeMutualExclusionConflict(this);
+    const conflict = describeMutualExclusionConflict(this) ?? describeWorkloadConflict(this);
     if (conflict) throw new OpenBoxConfigError(conflict);
 
     const method = resolveIdentityMethod(this);
@@ -367,8 +389,6 @@ export class OpenBoxConfig {
           break;
       }
     }
-
-    return this;
   }
 
   /** Load an `AgentIdentity` (or null). Decodes the seed exactly once. */
@@ -405,6 +425,18 @@ export class OpenBoxConfig {
   }
 
   /**
+   * The PKCS8 PEM a `keycloak_workload` client authenticates with, or null for
+   * every other method: `workloadPrivateKey`, or `oktaAgentPrivateKey` as the
+   * documented migration alias when `keycloak_workload` is selected explicitly.
+   *
+   * A non-null result fixes the client to contract v3 before its first request,
+   * so a bootstrap failure can never become a v1/v2 or API-key-only request.
+   */
+  resolvedWorkloadPrivateKey(): string | null {
+    return resolveWorkloadPrivateKey(this);
+  }
+
+  /**
    * Load an `OktaAgentIdentity`, or null when the resolved method isn't
    * `okta_ai_agent` OR the config is in bootstrap mode (where the identity
    * cannot be built until Core supplies its metadata — see
@@ -428,14 +460,15 @@ export class OpenBoxConfig {
   }
 
   // Redact secrets from structured logging / JSON.stringify. The Ed25519 seed and
-  // the Okta RSA private key are non-repudiation key material; a routine
-  // `console.log(config)` must not dump either.
+  // the Okta and workload RSA private keys are key material; a routine
+  // `console.log(config)` must not dump any of them.
   private redactedView(): Record<string, unknown> {
     const view: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(this)) view[key] = value;
     view["apiKey"] = this.apiKey ? "[REDACTED]" : this.apiKey;
     view["agentPrivateKey"] = this.agentPrivateKey ? "[REDACTED]" : this.agentPrivateKey;
     view["oktaAgentPrivateKey"] = this.oktaAgentPrivateKey ? "[REDACTED]" : this.oktaAgentPrivateKey;
+    view["workloadPrivateKey"] = this.workloadPrivateKey ? "[REDACTED]" : this.workloadPrivateKey;
     return view;
   }
 
@@ -445,28 +478,5 @@ export class OpenBoxConfig {
 
   [Symbol.for("nodejs.util.inspect.custom")](): Record<string, unknown> {
     return this.redactedView();
-  }
-}
-
-/**
- * HTTPS required for non-localhost URLs (protects API keys in transit).
- *
- * Parses with the WHATWG URL, reads `hostname`, strips IPv6 brackets
- * (`[::1]`→`::1`), and exact-matches the localhost set. Never uses
- * substring/startsWith — `localhost.evil.com` / `127.0.0.1.evil` are NOT local.
- */
-function validateUrlSecurity(apiUrl: string): void {
-  let url: URL;
-  try {
-    url = new URL(apiUrl);
-  } catch {
-    throw new OpenBoxConfigError(`Invalid api_url: ${apiUrl}`);
-  }
-  const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  if (url.protocol === "http:" && !isLocalhost) {
-    throw new OpenBoxInsecureURLError(
-      `Insecure HTTP URL detected: ${apiUrl}. Use HTTPS for non-localhost URLs to protect API keys in transit.`
-    );
   }
 }

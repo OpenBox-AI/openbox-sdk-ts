@@ -32,12 +32,13 @@
  * (see identity/index.ts's docstring for the same invariant on v1).
  */
 
-import { createHash, createPrivateKey, randomUUID, sign as cryptoSign } from "node:crypto";
+import { createHash, randomUUID, sign as cryptoSign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 
 import { OpenBoxConfigError } from "../errors/index.js";
 import { serializeBody } from "../serialization/index.js";
 import { buildAuthHeaders } from "./index.js";
+import { MIN_RSA_MODULUS_BITS, loadRsaPrivateKey } from "./rsa-private-key.js";
 import type { OktaAiAgentIdentityConfig } from "./types.js";
 
 /** The v2 wire header carrying the compact RS256 JWT (contract §2.1). */
@@ -47,47 +48,18 @@ export const ASSERTION_TYP = "openbox-agent-proof+jwt";
 /** Allowlisted at exactly one value for this release (contract §3, decision 24.2). */
 export const ASSERTION_ALGORITHM = "RS256";
 /** Minimum RSA modulus size Core accepts — reject smaller keys locally (contract §3, decision 24.3). */
-export const MIN_RSA_MODULUS_BITS = 2048;
+export { MIN_RSA_MODULUS_BITS };
 /** `exp - iat` ceiling (contract §4, decision 24.4). Every assertion is minted at this maximum. */
 export const ASSERTION_LIFETIME_SECONDS = 60;
 
 /**
  * Load a PKCS8 PEM-encoded RSA private key, rejecting non-RSA key types and
  * RSA keys below the 2048-bit floor LOCALLY. Never echoes key bytes in any
- * error message — only shape/size facts.
- *
- * Node's PEM parser is self-describing (the `-----BEGIN ... -----` label
- * determines PKCS1 vs PKCS8, not the `type` option), so this is a shape hint
- * rather than a hard PKCS1 rejection; combined with the RSA-type and
- * minimum-modulus checks below, any RSA private-key PEM loads correctly.
- * PKCS8 PEM remains the one documented, tested encoding for this release.
+ * error message — only shape/size facts. Delegates to the provider-neutral
+ * loader so the Okta and workload paths share one validation rule.
  */
 export function loadRsaPkcs8PrivateKey(pem: string): KeyObject {
-  if (typeof pem !== "string" || !pem.includes("PRIVATE KEY")) {
-    throw new OpenBoxConfigError(
-      "Invalid Okta agent private key: expected a PKCS8 PEM-encoded RSA private key (key bytes not shown)."
-    );
-  }
-  let key: KeyObject;
-  try {
-    key = createPrivateKey({ key: pem, format: "pem", type: "pkcs8" });
-  } catch {
-    throw new OpenBoxConfigError(
-      "Invalid Okta agent private key: could not load a PKCS8 PEM RSA key (key bytes not shown)."
-    );
-  }
-  if (key.asymmetricKeyType !== "rsa") {
-    throw new OpenBoxConfigError(
-      `Invalid Okta agent private key: expected an RSA key, got '${String(key.asymmetricKeyType)}' (key bytes not shown).`
-    );
-  }
-  const modulusBits = key.asymmetricKeyDetails?.modulusLength ?? 0;
-  if (modulusBits < MIN_RSA_MODULUS_BITS) {
-    throw new OpenBoxConfigError(
-      `Invalid Okta agent private key: RSA modulus must be at least ${MIN_RSA_MODULUS_BITS} bits, got ${modulusBits} (key bytes not shown).`
-    );
-  }
-  return key;
+  return loadRsaPrivateKey(pem, "Okta agent private key");
 }
 
 /**

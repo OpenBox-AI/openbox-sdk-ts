@@ -39,6 +39,17 @@ const AUDIENCE = "urn:openbox:fixture-deployment:core";
 const EXTERNAL_AGENT_ID = "fixture-okta-ai-agent-0001";
 const CREDENTIAL_KID = "fixture-okta-credential-kid-0001";
 
+/** Core's IAM-aware `authority` object — required by the parser even at bootstrap_version 1. */
+const AUTHORITY = {
+  assignment_id: "10000000-0000-4000-8000-000000000001",
+  provider_generation_id: "20000000-0000-4000-8000-000000000002",
+  generation_number: 3,
+  activation_version: "30000000-0000-4000-8000-000000000003",
+  identity_id: "40000000-0000-4000-8000-000000000004",
+  credential_id: "50000000-0000-4000-8000-000000000005",
+  projection_version: "projection-2026-09-25T00:00:00Z"
+};
+
 function bootstrapBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     bootstrap_version: 1,
@@ -47,6 +58,7 @@ function bootstrapBody(overrides: Record<string, unknown> = {}): Record<string, 
     organization_id: ORG_ID,
     deployment_id: DEPLOYMENT_ID,
     assertion_audience: AUDIENCE,
+    authority: AUTHORITY,
     okta: {
       external_agent_id: EXTERNAL_AGENT_ID,
       credential_kid: CREDENTIAL_KID,
@@ -420,9 +432,10 @@ describe("refreshIdentityMetadata", () => {
     expect(header["kid"]).toBe(rotatedKid);
   });
 
-  it("keeps the previous identity when the refreshed credential does not match the key", async () => {
+  it("leaves no stale signer when the refreshed credential does not match the key", async () => {
     // Credential rotated to a key this runtime does not hold: the refresh must
-    // fail rather than adopt metadata it cannot sign for.
+    // fail rather than adopt metadata it cannot sign for — and must not keep
+    // signing with the superseded identity either.
     const core = fakeCore([
       () => jsonResponse(200, bootstrapBody()),
       () =>
@@ -444,8 +457,14 @@ describe("refreshIdentityMetadata", () => {
       /does not match the selected Okta credential/
     );
 
-    // Cached metadata is unchanged — not replaced by the unusable document.
-    expect(client.identityMetadata()?.okta.credentialKid).toBe(CREDENTIAL_KID);
+    // Neither the unusable document nor the superseded identity remains.
+    expect(client.identityMetadata()).toBeNull();
+    // The next send bootstraps again rather than signing with the old identity;
+    // with no further bootstrap scripted, it fails before any governed request.
+    const governedBefore = core.calls.filter((c) => c.url.endsWith(AUTH_VALIDATE_PATH_V2)).length;
+    await expect(client.validateApiKey()).rejects.toThrow();
+    expect(core.bootstrapCallCount()).toBe(3);
+    expect(core.calls.filter((c) => c.url.endsWith(AUTH_VALIDATE_PATH_V2)).length).toBe(governedBefore);
   });
 
   it("is rejected for a client not in bootstrap mode", async () => {
