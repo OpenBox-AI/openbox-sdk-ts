@@ -173,8 +173,20 @@ not a theoretical one.
    what gets blocked per target.
 
 6. **Close the runtime** (`runtime.close()`) on shutdown to clear correlation
-   state. If you also called `initOpenBoxInstrumentation`, call its
-   `shutdown()` too (restores the patched globals).
+   state and close its client (cached workload tokens, identity metadata, key
+   references) — an injected client too, so consumers sharing one client must
+   coordinate shutdown. If you also called `initOpenBoxInstrumentation`, call
+   its `shutdown()` too (restores the patched globals).
+
+If your adapter builds its own client (e.g. to wire an `ApprovalPoller` before
+the runtime exists), build it with `OpenBoxClient.fromConfig(config, { fetchImpl })`
+rather than assembling identity options by hand: it maps every identity mode —
+DID, Okta (explicit or bootstrap), Keycloak workload (IAM v3), or unsigned — to
+exactly one client configuration, carries your SDK branding from the config, and
+re-validates identity exclusivity even when the config was resolved with
+`validate: false`. Forward framework options such as `workloadPrivateKey` into
+`OpenBoxConfig.resolve` with your `envPrefix`; never mint tokens or assertions in
+the adapter.
 
 ## What not to do
 

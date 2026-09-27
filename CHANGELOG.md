@@ -7,7 +7,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+Recommended as the next **major** release (proposed `2.0.0`): the v2 bootstrap
+parser, v2 refresh semantics, and runtime shutdown change externally visible behavior.
+
 ### Added
+
+- **IAM v3 Keycloak workload identity (`keycloak_workload`).** A new
+  `workloadPrivateKey` option (`OPENBOX_WORKLOAD_PRIVATE_KEY`, framework-prefixed
+  first) or an explicit `identityMethod: "keycloak_workload"` fixes a client to
+  contract v3 before its first request. The client fetches
+  `GET /api/v3/auth/bootstrap`, signs a one-minute RS256 `private_key_jwt`, exchanges
+  it at the advertised Keycloak token endpoint, and sends
+  `/api/v3/{auth/validate,governance/evaluate,governance/approval,handoffs}` with the
+  API key plus `X-OpenBox-Workload-Token`. Tokens are cached per client (≤ 300 s,
+  renewed 30 s early, one shared acquisition, bootstrap re-fetched on every renewal);
+  a runtime 401/403 invalidates the token without replay. Failures throw the new
+  `OpenBoxWorkloadAuthError` (`stage`, `httpStatus`, `reasonCode`) and never fall back
+  to v1/v2, API-key-only requests, or a fail-open ALLOW; v3 non-retryable 4xx are
+  contract errors. New client methods: `workloadIdentityMetadata()`,
+  `refreshWorkloadIdentity()`, `proveWorkloadIdentityTransition({ transitionId,
+  candidatePrivateKey })`. The Okta private key is accepted as a migration alias only
+  under an explicit `keycloak_workload` selection.
+- **`OpenBoxClient.fromConfig(config, { fetchImpl?, logger? })`** — the shared
+  config → client mapping used by `OpenBoxRuntime` and framework adapters. It
+  re-validates identity-mode exclusivity, so `validate: false` never skips mode or
+  key checks.
+- **`OpenBoxClient.close()`** — idempotent, synchronous release of cached tokens,
+  identity metadata, and key references; later sends are rejected.
+- Root exports: `OpenBoxWorkloadAuthError` and the identity configuration types
+  (`AgentIdentityMethod`, `KeycloakWorkloadIdentityConfig`, ...). `FakeCore` answers
+  and records Keycloak token-endpoint requests (`queueWorkloadToken`, `tokenRequests`).
+- `npm run interop:core` / `interop:core:packed` — TS ↔ Core IAM v3 gate running
+  Core's real v3 router and verifiers via `go test -overlay`.
+
+### Changed
+
+- **BREAKING — Okta v2 bootstrap requires Core's `authority` object**
+  (`assignment_id`, `provider_generation_id`, positive `generation_number`,
+  `activation_version`, `identity_id`, `credential_id`, `projection_version`). Core
+  deployments that predate it fail closed; upgrade Core or use the complete explicit
+  Okta configuration.
+- **BREAKING — `refreshIdentityMetadata()` no longer keeps the previous identity on
+  failure.** The current identity is dropped first; a failed refresh leaves later
+  requests blocked until a bootstrap succeeds. An older in-flight bootstrap can no
+  longer overwrite a newer refresh.
+- **BREAKING — `OpenBoxRuntime.close()` closes its client, including an injected one.**
+  Consumers sharing a client must coordinate shutdown.
+- `OpenBoxRuntime` builds its default client with `OpenBoxClient.fromConfig`.
+- `OpenBoxClient` serializes/inspects as a redacted summary (never the API key,
+  private keys, or tokens).
+- `AgentIdentityTransitionCandidate` is explicitly limited to the DID and Okta variants.
 
 - **Governed `node:http` / `node:https` instrumentation with full preflight
   blocking.** `initOpenBoxInstrumentation` now patches

@@ -116,18 +116,26 @@ than sending an assertion that could only be rejected:
 > OpenBox agent. Export the private key associated with the selected credential,
 > or rotate the agent credential.
 
+**Authority metadata.** The bootstrap document must carry Core's IAM-aware
+`authority` object (active assignment, provider generation, identity, credential,
+projection version). A Core deployment that predates it fails closed, with guidance
+to upgrade Core or supply the complete explicit configuration below — even though the
+document's `bootstrap_version` is still `1`.
+
 **Credential rotation.** Long-running agents can refresh explicitly:
 
 ```ts
 const document = await runtime.client.refreshIdentityMetadata();
-console.log(document.okta.credentialKid);
+console.log(document.okta.credentialKid, document.authority.generationNumber);
 ```
 
-The refresh re-runs the thumbprint check *before* replacing cached metadata, so a
-credential that rotated to a key this process does not hold fails loudly and leaves
-the client on its previous identity. The SDK never refreshes automatically after an
-auth failure: rotation may have selected a new public key while the process still
-holds the old private key, and a silent retry would hide that rather than fix it.
+The refresh drops the current identity *first*, then bootstraps again and re-runs the
+authority and thumbprint checks. A credential that rotated to a key this process does
+not hold therefore fails loudly **and leaves no stale signer behind**: later requests
+bootstrap again and stay blocked until one succeeds. An older in-flight bootstrap can
+never overwrite a newer refresh. The SDK never refreshes automatically after an auth
+failure: rotation may have selected a new public key while the process still holds
+the old private key, and a silent retry would hide that rather than fix it.
 
 **Requirements.** The key must be a PKCS8 PEM RSA key of at least 2048 bits, and
 its public half must already be registered in Okta for the selected credential.
@@ -139,6 +147,87 @@ merging stale local values over what Core would have supplied. If Core answers
 `404`, the SDK reports that the deployment predates bootstrap and asks you to
 upgrade Core or supply the complete explicit configuration — it never downgrades to
 an unsigned request or to a different identity method.
+
+### Keycloak workload identity (`keycloak_workload`, IAM v3)
+
+With IAM v3 the OpenBox API key still identifies the agent, and a short-lived
+Keycloak workload token proves the agent's active service account. The runtime
+needs exactly one additional secret — the service account's RSA private key:
+
+```dotenv
+OPENBOX_API_URL=https://core.example.com
+OPENBOX_API_KEY=obx_live_...
+OPENBOX_AGENT_IDENTITY_METHOD=keycloak_workload   # recommended: a missing key is then an error
+OPENBOX_WORKLOAD_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"
+```
+
+```ts
+import { OpenBoxClient } from "@openbox-ai/openbox-sdk-ts/client";
+import { OpenBoxConfig } from "@openbox-ai/openbox-sdk-ts/config";
+import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
+
+const config = OpenBoxConfig.resolve({ identityMethod: "keycloak_workload", onApiError: "fail_closed" });
+const client = OpenBoxClient.fromConfig(config); // or: new OpenBoxRuntime(config)
+await client.validateApiKey();
+```
+
+Everything else — token endpoint, issuer, audience, client id, key id, service
+account, activation version, identity source (`openbox`, `okta`, or `entra`) — comes
+from `GET /api/v3/auth/bootstrap`; there is no local setting for any of it. On first
+use (and on every renewal) the client fetches that document, validates it strictly,
+signs a one-minute RS256 `private_key_jwt`, exchanges it at Keycloak's token endpoint
+(`client_credentials`; no API key, proof header, or secret ever reaches Keycloak),
+and sends every request to `/api/v3/*` with `Authorization: Bearer <API key>` plus
+`X-OpenBox-Workload-Token: <token>`.
+
+- **Fixed to v3.** Selecting workload mode fixes the client to v3 before its first
+  request. A bootstrap `404`, a `409 workload_identity_unavailable`, a Keycloak
+  rejection, or any outage throws `OpenBoxWorkloadAuthError` (an `OpenBoxAuthError`
+  with `stage`, `httpStatus`, `reasonCode`) — never a v1/v2 or API-key-only request,
+  and never a fail-open ALLOW, under any `onApiError`. A v3 non-retryable `4xx`
+  (malformed payload, missing route) is a contract error that throws; network
+  failures and `5xx`/`408`/`429` after successful authentication keep `onApiError`.
+- **Renewal.** Tokens are cached per client for at most 300 s and renewed 30 s before
+  that; each renewal re-fetches bootstrap, so a new activation is picked up without a
+  restart. A refresh-due token is never used, even when renewal fails. Concurrent
+  operations share one acquisition. A runtime `401`/`403` discards the token and the
+  next operation bootstraps again; the rejected operation is not replayed.
+- **Metadata and refresh.** `client.workloadIdentityMetadata()` returns the
+  immutable, non-secret document behind the current usable token (or `null`);
+  `await client.refreshWorkloadIdentity()` invalidates immediately and re-acquires.
+  A different private key needs a new client after the managed transition.
+- **Select the method explicitly.** Without `identityMethod: "keycloak_workload"`,
+  a missing key means legacy API-key-only mode — and an env var that is *set but
+  empty* counts as set, so an empty `OPENBOX_<PREFIX>_WORKLOAD_PRIVATE_KEY=` shadows
+  a valid `OPENBOX_WORKLOAD_PRIVATE_KEY`. With the explicit method both cases fail
+  locally instead.
+- **Okta-sourced agents** moved to workload authentication may keep their key in
+  `OPENBOX_OKTA_AGENT_PRIVATE_KEY` as a migration alias, but only with an explicit
+  `identityMethod: "keycloak_workload"` (and only once the same public key is
+  registered for the active service account). An Okta key alone keeps Okta v2 mode;
+  both keys together, DID fields, or leftover Okta metadata are rejected locally.
+- **Candidate proof.** After a workload transition is prepared through the existing
+  management flow, prove the candidate key (it is never the active key, never stored,
+  and never activates anything):
+
+  ```ts
+  await runtime.client.proveWorkloadIdentityTransition({ transitionId, candidatePrivateKey });
+  ```
+
+The key must be a PKCS8 PEM RSA key of at least 2048 bits. See
+[`docs/source-of-truth.md`](docs/source-of-truth.md#iam-v3-workload-contract-summary)
+for the wire contract and the intentional differences from the Python SDK.
+
+### Shutdown
+
+`runtime.close()` closes the runtime's client — including a client injected via
+`new OpenBoxRuntime(config, { client })` — dropping cached tokens, identity metadata,
+and key references, aborting in-flight workload acquisition, and rejecting later
+sends. Consumers sharing one client must coordinate shutdown. `client.close()` is
+idempotent and synchronous; it cannot zeroize strings your own configuration still
+holds.
 
 ### Opt-in Node instrumentation
 
@@ -180,10 +269,10 @@ subpath, added as real consumers need it.
 
 | Import | Contents |
 |---|---|
-| `@openbox-ai/openbox-sdk-ts` | `SDK_VERSION`; `Verdict` + verdict helpers; `EvaluationResult`/`ApprovalResult`/`GuardrailsResult`; `EventEnvelope`/`EventType` + event factories (`workflowStarted`, `activityStarted`, `hook`, `handoff`, ...); span field matrices + diagnostics; `ActivityContext`; the full error hierarchy; strict gate helpers (`prepareLifecyclePayload`, `prepareHookPayload`, ...) |
+| `@openbox-ai/openbox-sdk-ts` | `SDK_VERSION`; `Verdict` + verdict helpers; `EvaluationResult`/`ApprovalResult`/`GuardrailsResult`; `EventEnvelope`/`EventType` + event factories (`workflowStarted`, `activityStarted`, `hook`, `handoff`, ...); span field matrices + diagnostics; `ActivityContext`; the full error hierarchy (incl. `OpenBoxWorkloadAuthError`); identity configuration types (`AgentIdentityMethod`, ...); strict gate helpers (`prepareLifecyclePayload`, `prepareHookPayload`, ...) |
 | `@openbox-ai/openbox-sdk-ts/adapters` | `FrameworkAdapter` interface + the default `CoreAdapter` |
 | `@openbox-ai/openbox-sdk-ts/approvals` | `ApprovalPoller` — HITL poll-loop orchestration |
-| `@openbox-ai/openbox-sdk-ts/client` | `OpenBoxClient` — the governance HTTP client (`evaluate`/`pollApproval`/`validateApiKey`) |
+| `@openbox-ai/openbox-sdk-ts/client` | `OpenBoxClient` — the governance HTTP client (`fromConfig`, `evaluate`/`pollApproval`/`validateApiKey`/`sendHandoff`, identity metadata/refresh, transition proofs, `close`) |
 | `@openbox-ai/openbox-sdk-ts/config` | `OpenBoxConfig` — layered env resolution + validation |
 | `@openbox-ai/openbox-sdk-ts/conformance` | `FakeCore`/`FakeAdapter`, scenario matrices, wire-shape assertions (test utility, not a frozen API) |
 | `@openbox-ai/openbox-sdk-ts/context` | `ContextStore` — per-runtime `AsyncLocalStorage` activity binding |
@@ -218,7 +307,14 @@ npm run test         # vitest + v8 coverage
 npm run build        # tsup (ESM, bundle:false, dts)
 npm run pack:check   # npm pack --dry-run
 npm run import:check # asserts the built root stays import-light
+npm run interop:core        # TS ↔ Core IAM v3 gate: Core's real v3 verifiers via `go test -overlay`
+npm run interop:core:packed # same gate, from npm-packed tarballs in an isolated consumer
 ```
+
+The interop gate needs a Go toolchain and an IAM v3 `openbox-core` checkout
+(`../openbox-core`, or `--core <dir>` / `OPENBOX_CORE_DIR`); it never modifies that
+checkout. It runs with controlled authority fixtures and a controlled Keycloak
+issuer — it is not a deployed Core/Keycloak/Backend run.
 
 ## License
 
