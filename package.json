@@ -97,6 +97,8 @@
     "clean": "rm -rf coverage dist",
     "format": "prettier --write .",
     "import:check": "node scripts/check-root-import-light.mjs",
+    "interop:core": "node scripts/core-interop/run-core-workload-interop.mjs",
+    "interop:core:packed": "node scripts/core-interop/run-core-workload-interop.mjs --packed",
     "lint": "eslint .",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run clean && npm run build",
