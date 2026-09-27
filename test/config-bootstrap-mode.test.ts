@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { OpenBoxConfig } from "../src/config/index.js";
 import { OpenBoxConfigError } from "../src/errors/index.js";
+import { fakePrivateKeyPem } from "./support/fake-private-key-pem.js";
 
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "identity-v2");
 
@@ -95,7 +96,7 @@ describe("bootstrap mode", () => {
     // normalized() must stay pure and offline — key parsing and the thumbprint
     // check belong to the bootstrap step. A garbage key resolves fine here and
     // fails later, at bootstrap.
-    const config = resolve({ oktaAgentPrivateKey: "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----" });
+    const config = resolve({ oktaAgentPrivateKey: fakePrivateKeyPem("nope") });
     expect(config.oktaConfigMode()).toBe("bootstrap");
   });
 

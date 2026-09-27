@@ -24,6 +24,7 @@ import {
   decodeJwt,
   publicKeyOf
 } from "./support/workload-identity-fakes.js";
+import { fakePrivateKeyPem } from "./support/fake-private-key-pem.js";
 
 const TARGET = { clientId: CLIENT_ID, kid: WORKLOAD_KID, tokenEndpoint: TOKEN_ENDPOINT };
 const ISSUED_AT = 1_790_000_000;
@@ -103,7 +104,7 @@ describe("loadRsaPrivateKey", () => {
   it.each([
     ["undersized RSA", UNDERSIZED_PEM, /at least 2048 bits, got 1024/],
     ["non-RSA", EC_PEM, /expected an RSA key, got 'ec'/],
-    ["garbage", "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----", /could not load/],
+    ["garbage", fakePrivateKeyPem("nope"), /could not load/],
     ["non-PEM", "hello", /expected a PKCS8 PEM/],
     ["non-string", 42, /expected a PKCS8 PEM/]
   ])("rejects a %s key, naming the field and never the key bytes", (_label, pem, pattern) => {

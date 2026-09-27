@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AUTH_VALIDATE_PATH_V2, EVALUATE_PATH_V2, OpenBoxClient } from "../src/client/index.js";
 import { AUTH_BOOTSTRAP_PATH_V2 } from "../src/config/bootstrap.js";
 import { OpenBoxConfigError, OpenBoxNetworkError } from "../src/errors/index.js";
+import { fakePrivateKeyPem } from "./support/fake-private-key-pem.js";
 
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "identity-v2");
 
@@ -222,7 +223,7 @@ describe("bootstrap success path", () => {
 describe("local key validation, before any network call", () => {
   it("rejects a malformed key without contacting Core", async () => {
     const core = fakeCore([]);
-    const client = bootstrapClient(core, "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----");
+    const client = bootstrapClient(core, fakePrivateKeyPem("not-a-key"));
 
     await expect(client.validateApiKey()).rejects.toThrow(OpenBoxConfigError);
     expect(core.bootstrapCallCount()).toBe(0);

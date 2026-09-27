@@ -17,6 +17,7 @@ import {
   UNDERSIZED_PEM,
   WORKLOAD_PEM
 } from "./support/workload-identity-fakes.js";
+import { fakePrivateKeyPem } from "./support/fake-private-key-pem.js";
 
 const BASE = { apiUrl: "https://core.example.com", apiKey: "obx_test_workloadcfg" };
 const GOLDEN_DID = "did:aip:12345678-1234-5678-1234-567812345678";
@@ -151,7 +152,7 @@ describe("workload environment precedence (explicit > prefixed > global)", () =>
   });
 
   it("prefers an explicit value over both variables", () => {
-    const explicit = "-----BEGIN PRIVATE KEY-----\nexplicit\n-----END PRIVATE KEY-----";
+    const explicit = fakePrivateKeyPem("explicit");
     const config = OpenBoxConfig.resolve({
       ...BASE,
       envPrefix: "OPENBOX_FRAMEWORK",
