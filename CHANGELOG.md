@@ -24,7 +24,9 @@ parser, v2 refresh semantics, and runtime shutdown change externally visible beh
   a runtime 401/403 invalidates the token without replay. Failures throw the new
   `OpenBoxWorkloadAuthError` (`stage`, `httpStatus`, `reasonCode`) and never fall back
   to v1/v2, API-key-only requests, or a fail-open ALLOW; v3 non-retryable 4xx are
-  contract errors. New client methods: `workloadIdentityMetadata()`,
+  contract errors. No v3 request follows a redirect — bootstrap, token exchange, or
+  runtime call — so the workload token never reaches another host; a runtime
+  redirect is a contract error. New client methods: `workloadIdentityMetadata()`,
   `refreshWorkloadIdentity()`, `proveWorkloadIdentityTransition({ transitionId,
   candidatePrivateKey })`. The Okta private key is accepted as a migration alias only
   under an explicit `keycloak_workload` selection.

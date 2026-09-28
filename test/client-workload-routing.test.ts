@@ -4,8 +4,13 @@
  * - the token exchange carries exactly the RFC 7523 form and nothing OpenBox;
  * - no failure, under any outage policy, produces a v1/v2 or API-key-only
  *   request, and a bad contract never becomes a fallback ALLOW;
+ * - runtime requests never follow a redirect, so the workload token never
+ *   reaches another target;
  * - secrets never reach logs or error messages.
  */
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -77,6 +82,7 @@ describe("v3 runtime routes and headers", () => {
       expect(call.headers["authorization"]).toBe(`Bearer ${API_KEY}`);
       // Raw token — never "Bearer "-prefixed.
       expect(call.headers["x-openbox-workload-token"]).toBe("access-token-1");
+      expect(call.redirect).toBe("manual");
       expect(call.headers["x-openbox-sdk-version"]).toMatch(/^openbox-base-typescript-v/);
       expect(call.headers["user-agent"]).toMatch(/^OpenBox-SDK\/openbox-base-typescript-v/);
       for (const header of LEGACY_PROOF_HEADERS) expect(call.headers[header]).toBeUndefined();
@@ -296,6 +302,102 @@ describe("no protocol downgrade, under every outage policy", () => {
         fallbackUsed: true
       });
     }
+  });
+});
+
+function listen(server: Server): Promise<string> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    });
+  });
+}
+
+function shutdown(server: Server): Promise<void> {
+  server.closeAllConnections();
+  return new Promise((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+}
+
+describe("redirects on v3 runtime requests", () => {
+  const redirect = (): Response =>
+    new Response(null, { status: 302, headers: { location: "https://elsewhere.example/collect" } });
+
+  it.each(["fail_open", "fail_closed", "fail_closed_destructive"] as const)(
+    "a redirect is a contract error on every operation, never an ALLOW or pending (%s)",
+    async (policy) => {
+      const endpoints = new WorkloadFakeEndpoints();
+      endpoints.validate = redirect;
+      endpoints.evaluate = redirect;
+      endpoints.approval = redirect;
+      endpoints.handoff = redirect;
+      const client = workloadClient(endpoints, { onApiError: policy });
+      const operations: Array<() => Promise<unknown>> = [
+        () => client.validateApiKey(),
+        () => client.evaluate(PAYLOAD),
+        () => client.pollApproval("wf-1", "run-1", "act-1"),
+        () => client.sendHandoff("88888888-8888-4888-8888-888888888888", { multiAgentSessionId: "mas-1" })
+      ];
+      for (const operation of operations) {
+        const error: unknown = await operation().catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(GovernanceAPIError);
+        expect((error as Error).message).toMatch(/answered with a redirect \(HTTP 302\)/);
+      }
+      expect(endpoints.runtimeCalls).toHaveLength(4);
+      expect(endpoints.legacyCalls).toHaveLength(0);
+    }
+  );
+
+  it("never lets the workload token reach a redirect target (real fetch, two local servers)", async () => {
+    const seenByTarget: string[] = [];
+    const target = createServer((request, response) => {
+      seenByTarget.push(`${request.method ?? "?"} ${request.url ?? "?"}`);
+      response.writeHead(200, { "content-type": "application/json" }).end('{"verdict":"allow"}');
+    });
+    const targetUrl = await listen(target);
+    const core = createServer((_request, response) => {
+      response.writeHead(307, { location: `${targetUrl}/collect` }).end();
+    });
+    const coreUrl = await listen(core);
+    try {
+      const endpoints = new WorkloadFakeEndpoints();
+      // Bootstrap and the token exchange stay on the double; runtime calls use real fetch.
+      const fetchImpl: typeof fetch = (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        const isAuthCall = url.pathname === AUTH_BOOTSTRAP_PATH_V3 || url.href.startsWith(TOKEN_ENDPOINT);
+        return isAuthCall ? endpoints.fetchImpl(input, init) : fetch(input, init);
+      };
+      const client = new OpenBoxClient(coreUrl, API_KEY, {
+        workloadPrivateKey: WORKLOAD_PEM,
+        fetchImpl,
+        logger: recordingLogger()
+      });
+
+      await expect(client.evaluate(PAYLOAD)).rejects.toBeInstanceOf(GovernanceAPIError);
+      await expect(client.pollApproval("wf-1", "run-1", "act-1")).rejects.toBeInstanceOf(GovernanceAPIError);
+      expect(endpoints.tokenCalls).toHaveLength(1);
+      expect(seenByTarget).toEqual([]);
+      client.close();
+    } finally {
+      await Promise.all([shutdown(core), shutdown(target)]);
+    }
+  });
+
+  it("leaves v1/v2 requests on fetch's default redirect handling", async () => {
+    const inits: Array<RequestInit | undefined> = [];
+    const client = new OpenBoxClient(CORE_URL, API_KEY, {
+      fetchImpl: (_input, init) => {
+        inits.push(init);
+        return Promise.resolve(jsonResponse(200, { verdict: "allow" }));
+      },
+      logger: recordingLogger()
+    });
+    await client.evaluate(PAYLOAD);
+    expect(inits).toHaveLength(1);
+    expect(inits[0]?.redirect).toBeUndefined();
   });
 });
 

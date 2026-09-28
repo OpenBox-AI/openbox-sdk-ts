@@ -187,7 +187,9 @@ and sends every request to `/api/v3/*` with `Authorization: Bearer <API key>` pl
   rejection, or any outage throws `OpenBoxWorkloadAuthError` (an `OpenBoxAuthError`
   with `stage`, `httpStatus`, `reasonCode`) — never a v1/v2 or API-key-only request,
   and never a fail-open ALLOW, under any `onApiError`. A v3 non-retryable `4xx`
-  (malformed payload, missing route) is a contract error that throws; network
+  (malformed payload, missing route) — or a redirect, which no v3 request ever
+  follows, so the workload token never reaches another host — is a contract error
+  that throws; network
   failures and `5xx`/`408`/`429` after successful authentication keep `onApiError`.
 - **Renewal.** Tokens are cached per client for at most 300 s and renewed 30 s before
   that; each renewal re-fetches bootstrap, so a new activation is picked up without a

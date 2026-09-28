@@ -57,6 +57,14 @@ export function reasonCodeFrom(text: string, keys: readonly string[]): string | 
 }
 
 /** Core error bodies carry `reason_code` (their numeric `code` is the HTTP status). */
+/**
+ * A redirect answer: a 3xx under `redirect: "manual"` (Node), or an opaque
+ * redirect (browsers). v3 requests never follow one.
+ */
+export function isRedirectResponse(response: Response): boolean {
+  return response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400);
+}
+
 export const CORE_REASON_KEYS = ["reason_code", "code", "reason"] as const;
 /** OAuth token-endpoint errors carry `error` (RFC 6749 §5.2); `error_description` is never read. */
 export const OAUTH_REASON_KEYS = ["error"] as const;
@@ -90,7 +98,7 @@ export async function sendAuthenticationRequest(
     throw new OpenBoxWorkloadAuthError(describe.networkFailure(networkDetail(error)), { stage });
   }
   const target = describe.target;
-  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+  if (isRedirectResponse(response)) {
     throw new OpenBoxWorkloadAuthError(
       `${target} answered with a redirect (HTTP ${response.status}); redirects are refused so ` +
         "credentials never follow them to another target.",

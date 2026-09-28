@@ -80,7 +80,8 @@ target Core revision before relying on this table.
 Rules enforced in `src/client/workload-*.ts`: token endpoint must equal the issuer
 (one trailing slash trimmed) + `/protocol/openid-connect/token`; issuer/token URLs
 are HTTPS (HTTP only for exact `localhost`/`127.0.0.1`/`::1`) with no userinfo,
-query, or fragment; bootstrap/token/transition requests refuse redirects and run in
+query, or fragment; no v3 request follows a redirect (a runtime redirect is a contract
+error — ledger 12); bootstrap/token/transition requests run in
 `runAsInternal` (Keycloak is not Core's origin); tokens cache ≤ 300 s with a 30 s
 margin, `expires_in` must be a number > 30.
 

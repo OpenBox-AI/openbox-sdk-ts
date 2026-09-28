@@ -152,6 +152,20 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
   lowercase values (`openbox_identity_source` claim compared verbatim).
 - **Resolution:** exact match only (`openbox`, `okta`, `entra`).
 
+## 12. Redirects on v3 runtime calls — refused
+
+- **Spec (line 192):** reject redirects for the bootstrap and token exchange; "do not
+  let an assertion or API key follow a redirect to another target". Runtime calls are
+  not mentioned.
+- **Node fetch:** on a cross-origin redirect it drops `Authorization` but re-sends
+  custom headers, so a followed runtime redirect hands the reusable
+  `X-OpenBox-Workload-Token` (≤ 300 s) to the target — which also answers the
+  governance call (a real-fetch test showed its body parsed as the verdict).
+- **Python:** httpx never follows redirects; the 3xx then follows `on_api_error`.
+- **Resolution (user decision, 2026-09-28):** every v3 runtime request uses
+  `redirect: "manual"`; a redirect answer is a contract error (`GovernanceAPIError`,
+  never a fallback ALLOW or "still pending"), like ledger 8. v1/v2 unchanged.
+
 ---
 
 ## Open decisions (product/security — not plan defects)

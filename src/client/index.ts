@@ -78,7 +78,7 @@ import {
 } from "../config/bootstrap.js";
 import { WorkloadAuthenticator, type WorkloadAuthState } from "./workload-authenticator.js";
 import type { WorkloadBootstrapDocument } from "./workload-documents.js";
-import { CORE_REASON_KEYS, reasonCodeFrom } from "./workload-http.js";
+import { CORE_REASON_KEYS, isRedirectResponse, reasonCodeFrom } from "./workload-http.js";
 import {
   proveWorkloadTransition,
   type WorkloadTransitionProofOptions,
@@ -229,11 +229,22 @@ function assertWorkloadIsSoleIdentity(options: OpenBoxClientOptions): void {
 }
 
 /**
- * v3 statuses that are contract errors rather than outages: every 4xx except
- * auth (401/403, handled separately) and the retryable 408/429.
+ * v3 answers that are contract errors rather than outages: a redirect (never
+ * followed on v3) and every 4xx except auth (401/403, handled separately) and
+ * the retryable 408/429.
  */
-function isV3ContractErrorStatus(status: number): boolean {
-  return status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+function isV3ContractError(response: Response): boolean {
+  const { status } = response;
+  return isRedirectResponse(response) || (status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status));
+}
+
+/**
+ * v3 runtime requests never follow a redirect: fetch drops `Authorization` on a
+ * cross-origin redirect but re-sends custom headers, so following one would hand
+ * the reusable workload token to the redirect target. v1/v2 keep fetch's default.
+ */
+function redirectPolicy(prepared: PreparedRequest): { redirect?: "manual" } {
+  return prepared.contractVersion === 3 ? { redirect: "manual" } : {};
 }
 
 export interface ClientLogger {
@@ -674,8 +685,8 @@ export class OpenBoxClient {
    * POST a governance event; parse the verdict. Under fail_open, network/outage
    * failures return a `fallbackUsed=true` ALLOW. An auth/signing 401/403 throws
    * (never fail-opens) — see the class docstring. On v3, a workload-acquisition
-   * failure throws before any request, and a non-retryable 4xx is a contract
-   * error that throws under every outage policy.
+   * failure throws before any request, and a redirect or non-retryable 4xx is
+   * a contract error that throws under every outage policy.
    */
   async evaluate(payload: JsonValue): Promise<EvaluationResult> {
     const prepared = await this.prepared("evaluate", payload);
@@ -686,7 +697,8 @@ export class OpenBoxClient {
           method: "POST",
           headers: prepared.headers,
           body: prepared.body,
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: AbortSignal.timeout(this.timeoutMs),
+          ...redirectPolicy(prepared)
         })
       );
     } catch (e) {
@@ -697,7 +709,7 @@ export class OpenBoxClient {
       return this.rejectAuthFailure("evaluate", response, prepared);
     }
     this.consecutiveAuthFailures = 0;
-    if (prepared.contractVersion === 3 && isV3ContractErrorStatus(response.status)) {
+    if (prepared.contractVersion === 3 && isV3ContractError(response)) {
       throw await this.v3ContractError("evaluate", response);
     }
     if (response.status >= 400) {
@@ -783,8 +795,15 @@ export class OpenBoxClient {
     );
   }
 
-  /** A v3 non-retryable 4xx: a contract error, never an outage and never a fallback ALLOW. */
+  /** A v3 refused redirect or non-retryable 4xx: a contract error, never an outage and never a fallback ALLOW. */
   private async v3ContractError(op: RuntimeOperation, response: Response): Promise<GovernanceAPIError> {
+    if (isRedirectResponse(response)) {
+      return new GovernanceAPIError(
+        `The v3 ${op} request was answered with a redirect (HTTP ${response.status}). Redirects are ` +
+          "refused so the workload token never follows one to another target; point apiUrl at " +
+          "OpenBox Core directly."
+      );
+    }
     const reasonCode = reasonCodeFrom((await safeText(response)) ?? "", CORE_REASON_KEYS);
     const detail = reasonCode ? `HTTP ${response.status} ${reasonCode}` : `HTTP ${response.status}`;
     return new GovernanceAPIError(
@@ -824,7 +843,8 @@ export class OpenBoxClient {
           method: "POST",
           headers: prepared.headers,
           body: prepared.body,
-          signal: composedSignal
+          signal: composedSignal,
+          ...redirectPolicy(prepared)
         })
       );
     } catch (e) {
@@ -840,7 +860,7 @@ export class OpenBoxClient {
     if (response.status === 401 || response.status === 403) {
       return this.rejectAuthFailure("approval", response, prepared);
     }
-    if (prepared.contractVersion === 3 && isV3ContractErrorStatus(response.status)) {
+    if (prepared.contractVersion === 3 && isV3ContractError(response)) {
       throw await this.v3ContractError("approval", response);
     }
     if (response.status !== 200) {
@@ -876,7 +896,8 @@ export class OpenBoxClient {
         this.fetchImpl(prepared.url, {
           method: "GET",
           headers: prepared.headers,
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: AbortSignal.timeout(this.timeoutMs),
+          ...redirectPolicy(prepared)
         })
       );
     } catch (e) {
@@ -891,7 +912,7 @@ export class OpenBoxClient {
       if (reasonCode) throw this.isV2 ? mapAssertionError(reasonCode) : mapSigningError(reasonCode);
       throw new OpenBoxAuthError("Invalid API key. Check your API key at dashboard.openbox.ai");
     }
-    if (prepared.contractVersion === 3 && isV3ContractErrorStatus(response.status)) {
+    if (prepared.contractVersion === 3 && isV3ContractError(response)) {
       throw await this.v3ContractError("validate", response);
     }
     throw new OpenBoxNetworkError(
@@ -928,7 +949,8 @@ export class OpenBoxClient {
           method: "POST",
           headers: prepared.headers,
           body: prepared.body,
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: AbortSignal.timeout(this.timeoutMs),
+          ...redirectPolicy(prepared)
         })
       );
     } catch (e) {
@@ -936,6 +958,9 @@ export class OpenBoxClient {
     }
     if (response.status === 401 || response.status === 403) {
       return this.rejectAuthFailure("handoff", response, prepared);
+    }
+    if (prepared.contractVersion === 3 && isRedirectResponse(response)) {
+      throw await this.v3ContractError("handoff", response);
     }
     if (response.status !== 200) {
       throw new GovernanceAPIError(`Handoff request failed: HTTP ${response.status}`);
