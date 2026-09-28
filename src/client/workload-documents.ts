@@ -14,6 +14,7 @@
  */
 
 import { OpenBoxWorkloadAuthError, type WorkloadAuthStage } from "../errors/workload.js";
+import { isLoopbackHostname } from "../config/url-security.js";
 
 export const WORKLOAD_BOOTSTRAP_VERSION = 3;
 export const WORKLOAD_CONTRACT_VERSION = 3;
@@ -66,7 +67,6 @@ type Json = Record<string, unknown>;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 // RFC 3339 date-time with a mandatory offset (`Z` or `±hh:mm`); Go marshals time.Time this way.
 const RFC3339_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
 // A header-safe opaque token: visible ASCII only (JWTs are base64url segments and dots).
@@ -156,9 +156,9 @@ function requireSafeUrl(value: string, key: string, what: string, stage: Workloa
     return invalid();
   }
   if (url.username || url.password) invalid();
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const secure = url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.has(host));
-  if (!secure || !host) invalid();
+  const secure =
+    url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHostname(url.hostname));
+  if (!secure || !url.hostname) invalid();
 }
 
 /** Core's own rule: the issuer, minus one trailing slash, plus the Keycloak token path. */

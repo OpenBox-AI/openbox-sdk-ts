@@ -40,6 +40,32 @@ export interface TransitionExpectedTarget {
   algorithm?: string;
 }
 
+/** Okta fields a prepared target may pin, in the order mismatches are reported. */
+const OKTA_TARGET_FIELDS = [
+  "openboxAgentId",
+  "organizationId",
+  "deploymentId",
+  "externalAgentId",
+  "keyId",
+  "algorithm"
+] as const;
+
+/** Every field the target pins (supplies) that disagrees with the candidate. */
+function listTargetMismatches(
+  candidate: AgentIdentityTransitionCandidate,
+  expected: TransitionExpectedTarget
+): string[] {
+  if (expected.method !== candidate.method) {
+    return [`method (expected '${expected.method}', got '${candidate.method}')`];
+  }
+  if (candidate.method === "okta_ai_agent") {
+    return OKTA_TARGET_FIELDS.filter(
+      (field) => expected[field] !== undefined && expected[field] !== candidate[field]
+    );
+  }
+  return expected.did !== undefined && expected.did !== candidate.did ? ["did"] : [];
+}
+
 /**
  * Throws `OpenBoxConfigError` (naming every mismatched field) when `expected`
  * is supplied and disagrees with `candidate`. No-op when `expected` is
@@ -50,33 +76,7 @@ export function assertCandidateMatchesExpectedTarget(
   expected: TransitionExpectedTarget | undefined
 ): void {
   if (!expected) return;
-  const mismatches: string[] = [];
-
-  if (expected.method !== candidate.method) {
-    mismatches.push(`method (expected '${expected.method}', got '${candidate.method}')`);
-  } else if (candidate.method === "okta_ai_agent") {
-    if (expected.openboxAgentId !== undefined && expected.openboxAgentId !== candidate.openboxAgentId) {
-      mismatches.push("openboxAgentId");
-    }
-    if (expected.organizationId !== undefined && expected.organizationId !== candidate.organizationId) {
-      mismatches.push("organizationId");
-    }
-    if (expected.deploymentId !== undefined && expected.deploymentId !== candidate.deploymentId) {
-      mismatches.push("deploymentId");
-    }
-    if (expected.externalAgentId !== undefined && expected.externalAgentId !== candidate.externalAgentId) {
-      mismatches.push("externalAgentId");
-    }
-    if (expected.keyId !== undefined && expected.keyId !== candidate.keyId) {
-      mismatches.push("keyId");
-    }
-    if (expected.algorithm !== undefined && expected.algorithm !== candidate.algorithm) {
-      mismatches.push("algorithm");
-    }
-  } else if (expected.did !== undefined && expected.did !== candidate.did) {
-    mismatches.push("did");
-  }
-
+  const mismatches = listTargetMismatches(candidate, expected);
   if (mismatches.length > 0) {
     throw new OpenBoxConfigError(
       `Candidate identity does not match the prepared transition target: ${mismatches.join(", ")}. ` +

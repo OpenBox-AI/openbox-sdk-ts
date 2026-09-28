@@ -249,3 +249,50 @@ export function describeMixedOktaConfig(fields: IdentityFields): string {
     "remaining field for fully explicit configuration."
   );
 }
+
+/** Only RS256 is allowlisted; the error text for any other algorithm, else null. */
+function describeOktaAlgorithmProblem(algorithm: string | null): string | null {
+  return algorithm === "RS256"
+    ? null
+    : `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(algorithm)}); only RS256 is allowlisted.`;
+}
+
+/**
+ * The offline configuration error for an `okta_ai_agent` identity, or null
+ * when it is valid. Callers must have already established that the resolved
+ * method is `okta_ai_agent`.
+ */
+export function describeOktaConfigProblem(fields: IdentityFields): string | null {
+  // The private key is the one value Core can never supply, in either mode.
+  if (!fields.oktaAgentPrivateKey) {
+    return (
+      "Okta agent identity requires oktaAgentPrivateKey (OPENBOX_OKTA_AGENT_PRIVATE_KEY); " +
+      "OpenBox never holds or returns an agent's private key."
+    );
+  }
+
+  switch (classifyOktaConfigMode(fields)) {
+    case "mixed":
+      return describeMixedOktaConfig(fields);
+    case "legacy": {
+      // Fully explicit configuration — unchanged from before bootstrap
+      // existed, so an already-deployed runtime keeps working verbatim.
+      const missing = listMissingOktaFields(fields);
+      if (missing.length > 0) {
+        return `Okta agent identity is missing required field(s): ${missing.join(", ")}.`;
+      }
+      return describeOktaAlgorithmProblem(fields.oktaAgentAlgorithm);
+    }
+    case "bootstrap":
+      // Nothing further to validate offline. The remaining checks — key
+      // parsing, RSA size, and the thumbprint match against the selected
+      // credential — need the private key and the network, and belong to the
+      // bootstrap step itself. `normalized()` stays pure and offline, which
+      // is what lets it keep running inside constructors.
+      //
+      // An explicitly set algorithm must still be the allowlisted one, so a
+      // stale `OPENBOX_OKTA_AGENT_ALGORITHM=RS512` fails here rather than
+      // being silently ignored.
+      return fields.oktaAgentAlgorithm === null ? null : describeOktaAlgorithmProblem(fields.oktaAgentAlgorithm);
+  }
+}

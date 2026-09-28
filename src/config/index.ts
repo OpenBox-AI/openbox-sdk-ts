@@ -18,16 +18,22 @@ import { DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE } from "../identity/sdk-identi
 import type { AgentIdentityMethod } from "../identity/types.js";
 import {
   classifyOktaConfigMode,
-  describeMixedOktaConfig,
   describeMutualExclusionConflict,
+  describeOktaConfigProblem,
   describeWorkloadConflict,
-  listMissingOktaFields,
   resolveIdentityMethod,
   resolveWorkloadPrivateKey,
   type OktaConfigMode,
   type ResolvedIdentityMethod
 } from "./identity-resolution.js";
 import { trimTrailingSlashes, validateUrlSecurity } from "./url-security.js";
+
+/** The methods a caller may select explicitly; `legacy_unsigned` is inferred only. */
+const SELECTABLE_IDENTITY_METHODS: ReadonlySet<string> = new Set<AgentIdentityMethod>([
+  "openbox_did",
+  "okta_ai_agent",
+  "keycloak_workload"
+]);
 
 // API key format (obx_live_... or obx_test_...). `\w` == [A-Za-z0-9_], matching Python.
 const API_KEY_PATTERN = /^obx_(live|test)_\w+$/;
@@ -322,12 +328,7 @@ export class OpenBoxConfig {
     }
     if (this.agentDid) validateAgentDid(this.agentDid);
 
-    if (
-      this.identityMethod !== null &&
-      this.identityMethod !== "openbox_did" &&
-      this.identityMethod !== "okta_ai_agent" &&
-      this.identityMethod !== "keycloak_workload"
-    ) {
+    if (this.identityMethod !== null && !SELECTABLE_IDENTITY_METHODS.has(this.identityMethod)) {
       throw new OpenBoxConfigError(
         `identityMethod must be 'openbox_did', 'okta_ai_agent', or 'keycloak_workload' ` +
           `(got ${JSON.stringify(this.identityMethod)}). 'legacy_unsigned' is inferred only, never selectable.`
@@ -343,52 +344,8 @@ export class OpenBoxConfig {
         "identityMethod is 'openbox_did' but agentDid/agentPrivateKey are not configured."
       );
     }
-    if (method === "okta_ai_agent") {
-      // The private key is the one value Core can never supply, in either mode.
-      if (!this.oktaAgentPrivateKey) {
-        throw new OpenBoxConfigError(
-          "Okta agent identity requires oktaAgentPrivateKey (OPENBOX_OKTA_AGENT_PRIVATE_KEY); " +
-            "OpenBox never holds or returns an agent's private key."
-        );
-      }
-
-      switch (classifyOktaConfigMode(this)) {
-        case "mixed":
-          throw new OpenBoxConfigError(describeMixedOktaConfig(this));
-        case "legacy": {
-          // Fully explicit configuration — unchanged from before bootstrap
-          // existed, so an already-deployed runtime keeps working verbatim.
-          const missing = listMissingOktaFields(this);
-          if (missing.length > 0) {
-            throw new OpenBoxConfigError(
-              `Okta agent identity is missing required field(s): ${missing.join(", ")}.`
-            );
-          }
-          if (this.oktaAgentAlgorithm !== "RS256") {
-            throw new OpenBoxConfigError(
-              `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
-            );
-          }
-          break;
-        }
-        case "bootstrap":
-          // Nothing further to validate offline. The remaining checks — key
-          // parsing, RSA size, and the thumbprint match against the selected
-          // credential — need the private key and the network, and belong to the
-          // bootstrap step itself. `normalized()` stays pure and offline, which
-          // is what lets it keep running inside constructors.
-          //
-          // An explicitly set algorithm must still be the allowlisted one, so a
-          // stale `OPENBOX_OKTA_AGENT_ALGORITHM=RS512` fails here rather than
-          // being silently ignored.
-          if (this.oktaAgentAlgorithm !== null && this.oktaAgentAlgorithm !== "RS256") {
-            throw new OpenBoxConfigError(
-              `oktaAgentAlgorithm must be 'RS256' (got ${JSON.stringify(this.oktaAgentAlgorithm)}); only RS256 is allowlisted.`
-            );
-          }
-          break;
-      }
-    }
+    const oktaProblem = method === "okta_ai_agent" ? describeOktaConfigProblem(this) : null;
+    if (oktaProblem) throw new OpenBoxConfigError(oktaProblem);
   }
 
   /** Load an `AgentIdentity` (or null). Decodes the seed exactly once. */

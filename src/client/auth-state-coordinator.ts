@@ -58,21 +58,12 @@ export class AuthStateCoordinator<T extends object> {
   /** Resolve a usable state, joining the in-flight acquisition or starting one. */
   async get(signal?: AbortSignal): Promise<T> {
     for (;;) {
-      if (this.#closed) throw this.#options.closedError();
-      const state = this.#state;
-      if (state !== null) {
-        if (this.#options.isUsable(state)) return state;
-        this.#state = null; // refresh-due: drop it rather than ever serving it again
-      }
+      const usable = this.#takeUsableState();
+      if (usable !== null) return usable;
       const flight = this.#flight ?? this.#startFlight();
-      try {
-        const published = await waitUnlessAborted(flight.promise, signal);
-        // Invalidated between publication and this resumption → loop to what is current.
-        if (published === this.#state) return published;
-      } catch (error) {
-        if (signal?.aborted || (flight.revision === this.#revision && !this.#closed)) throw error;
-        // Superseded by reset()/close() mid-flight: its outcome is irrelevant; loop.
-      }
+      const published = await this.#awaitFlight(flight, signal);
+      // Invalidated between publication and this resumption → loop to what is current.
+      if (published !== null && published === this.#state) return published;
     }
   }
 
@@ -102,15 +93,38 @@ export class AuthStateCoordinator<T extends object> {
     this.reset();
   }
 
+  /** The published state while usable (a refresh-due one is dropped); throws once closed. */
+  #takeUsableState(): T | null {
+    if (this.#closed) throw this.#options.closedError();
+    const state = this.#state;
+    if (state === null) return null;
+    if (this.#options.isUsable(state)) return state;
+    this.#state = null; // refresh-due: drop it rather than ever serving it again
+    return null;
+  }
+
+  /**
+   * The flight's published state, or null when the flight was superseded by
+   * reset()/close() mid-flight — its outcome is irrelevant and the caller loops.
+   * The caller's own abort, and the failure of a still-current flight, propagate.
+   */
+  async #awaitFlight(flight: Flight<T>, signal: AbortSignal | undefined): Promise<T | null> {
+    try {
+      return await waitUnlessAborted(flight.promise, signal);
+    } catch (error) {
+      const superseded = flight.revision !== this.#revision || this.#closed;
+      if (signal?.aborted || !superseded) throw error;
+      return null;
+    }
+  }
+
   #startFlight(): Flight<T> {
     const revision = this.#revision;
     const controller = new AbortController();
-    let acquisition: Promise<T>;
-    try {
-      acquisition = this.#options.acquire(controller.signal);
-    } catch (error) {
-      acquisition = Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
+    // A synchronous throw from `acquire` rejects this flight like an async failure.
+    const acquisition = new Promise<T>((resolve) => {
+      resolve(this.#options.acquire(controller.signal));
+    });
     const flight: Flight<T> = {
       revision,
       controller,

@@ -36,8 +36,12 @@ import {
 import { mapAssertionError } from "../errors/assertion.js";
 import { OpenBoxWorkloadAuthError } from "../errors/workload.js";
 import { AgentIdentity, buildAuthHeaders, prepareSignedRequest } from "../identity/index.js";
-import { OktaAgentIdentity, prepareOktaSignedRequest } from "../identity/okta.js";
-import type { OktaTransitionClaims } from "../identity/okta.js";
+import {
+  OktaAgentIdentity,
+  loadRsaPkcs8PrivateKey,
+  prepareOktaSignedRequest,
+  type OktaTransitionClaims
+} from "../identity/okta.js";
 import type {
   OktaAiAgentIdentityConfig,
   OpenBoxDidIdentityConfig
@@ -72,7 +76,6 @@ import {
   fetchBootstrapDocument,
   type IdentityBootstrapDocument
 } from "../config/bootstrap.js";
-import { loadRsaPkcs8PrivateKey } from "../identity/okta.js";
 import { WorkloadAuthenticator, type WorkloadAuthState } from "./workload-authenticator.js";
 import type { WorkloadBootstrapDocument } from "./workload-documents.js";
 import { CORE_REASON_KEYS, reasonCodeFrom } from "./workload-http.js";
@@ -166,6 +169,63 @@ function isHeaderSafe(value: string): boolean {
   while (end > start && isHttpWhitespace(value[end - 1])) end -= 1;
   const inner = value.slice(start, end);
   return !inner.includes("\r") && !inner.includes("\n") && !inner.includes("\0");
+}
+
+function validateOnApiError(onApiError: OnApiError): OnApiError {
+  if (
+    onApiError !== "fail_open" &&
+    onApiError !== "fail_closed" &&
+    onApiError !== "fail_closed_destructive"
+  ) {
+    throw new Error(
+      `onApiError must be 'fail_open', 'fail_closed', or 'fail_closed_destructive', got ${String(onApiError)}`
+    );
+  }
+  return onApiError;
+}
+
+function assertHeaderSafeApiKey(apiKey: string): void {
+  if (typeof apiKey !== "string" || !isHeaderSafe(apiKey)) {
+    throw new OpenBoxConfigError(
+      "The OpenBox API key contains a line break or NUL character, which is not valid in an HTTP header (key not shown)."
+    );
+  }
+}
+
+/** At most one v1/v2 identity method per client: DID, explicit Okta, or Okta bootstrap. */
+function assertExclusiveV1V2IdentityOptions(options: OpenBoxClientOptions): void {
+  if (options.identity && options.oktaIdentity) {
+    throw new OpenBoxConfigError(
+      "OpenBoxClient received both a v1 identity and a v2 oktaIdentity; exactly one (or neither) is allowed."
+    );
+  }
+  if (options.oktaBootstrapPrivateKey && options.oktaIdentity) {
+    throw new OpenBoxConfigError(
+      "OpenBoxClient received both oktaBootstrapPrivateKey and a fully resolved oktaIdentity; " +
+        "supply exactly one — bootstrap mode fetches the metadata that oktaIdentity already carries."
+    );
+  }
+  if (options.oktaBootstrapPrivateKey && options.identity) {
+    throw new OpenBoxConfigError(
+      "OpenBoxClient received both oktaBootstrapPrivateKey (okta_ai_agent) and a v1 identity " +
+        "(openbox_did); exactly one identity method is allowed."
+    );
+  }
+}
+
+/** A workload key (keycloak_workload) excludes every other identity method. */
+function assertWorkloadIsSoleIdentity(options: OpenBoxClientOptions): void {
+  const conflicting = [
+    options.identity ? "identity (openbox_did)" : null,
+    options.oktaIdentity ? "oktaIdentity (okta_ai_agent)" : null,
+    options.oktaBootstrapPrivateKey ? "oktaBootstrapPrivateKey (okta_ai_agent)" : null
+  ].filter((name): name is string => name !== null);
+  if (conflicting.length > 0) {
+    throw new OpenBoxConfigError(
+      `OpenBoxClient received workloadPrivateKey (keycloak_workload) together with ${conflicting.join(", ")}; ` +
+        "exactly one identity method is allowed."
+    );
+  }
 }
 
 /**
@@ -293,38 +353,9 @@ export class OpenBoxClient {
   private closed = false;
 
   constructor(apiUrl: string, apiKey: string, options: OpenBoxClientOptions = {}) {
-    const onApiError = options.onApiError ?? "fail_open";
-    if (
-      onApiError !== "fail_open" &&
-      onApiError !== "fail_closed" &&
-      onApiError !== "fail_closed_destructive"
-    ) {
-      throw new Error(
-        `onApiError must be 'fail_open', 'fail_closed', or 'fail_closed_destructive', got ${String(onApiError)}`
-      );
-    }
-    if (options.identity && options.oktaIdentity) {
-      throw new OpenBoxConfigError(
-        "OpenBoxClient received both a v1 identity and a v2 oktaIdentity; exactly one (or neither) is allowed."
-      );
-    }
-    if (options.oktaBootstrapPrivateKey && options.oktaIdentity) {
-      throw new OpenBoxConfigError(
-        "OpenBoxClient received both oktaBootstrapPrivateKey and a fully resolved oktaIdentity; " +
-          "supply exactly one — bootstrap mode fetches the metadata that oktaIdentity already carries."
-      );
-    }
-    if (options.oktaBootstrapPrivateKey && options.identity) {
-      throw new OpenBoxConfigError(
-        "OpenBoxClient received both oktaBootstrapPrivateKey (okta_ai_agent) and a v1 identity " +
-          "(openbox_did); exactly one identity method is allowed."
-      );
-    }
-    if (typeof apiKey !== "string" || !isHeaderSafe(apiKey)) {
-      throw new OpenBoxConfigError(
-        "The OpenBox API key contains a line break or NUL character, which is not valid in an HTTP header (key not shown)."
-      );
-    }
+    const onApiError = validateOnApiError(options.onApiError ?? "fail_open");
+    assertExclusiveV1V2IdentityOptions(options);
+    assertHeaderSafeApiKey(apiKey);
     // Any supplied value — even an empty one — selects v3 and is validated
     // below; it never silently falls through to a v1 client.
     const workloadPrivateKey = options.workloadPrivateKey ?? null;
@@ -332,17 +363,7 @@ export class OpenBoxClient {
       // A reusable workload token (and the API key) must never travel in
       // cleartext, even when config normalization was skipped (`validate: false`).
       validateUrlSecurity(apiUrl);
-      const conflicting = [
-        options.identity ? "identity (openbox_did)" : null,
-        options.oktaIdentity ? "oktaIdentity (okta_ai_agent)" : null,
-        options.oktaBootstrapPrivateKey ? "oktaBootstrapPrivateKey (okta_ai_agent)" : null
-      ].filter((name): name is string => name !== null);
-      if (conflicting.length > 0) {
-        throw new OpenBoxConfigError(
-          `OpenBoxClient received workloadPrivateKey (keycloak_workload) together with ${conflicting.join(", ")}; ` +
-            "exactly one identity method is allowed."
-        );
-      }
+      assertWorkloadIsSoleIdentity(options);
     }
     this.apiUrl = trimTrailingSlashes(apiUrl);
     this.apiKey = apiKey;
@@ -765,8 +786,9 @@ export class OpenBoxClient {
   /** A v3 non-retryable 4xx: a contract error, never an outage and never a fallback ALLOW. */
   private async v3ContractError(op: RuntimeOperation, response: Response): Promise<GovernanceAPIError> {
     const reasonCode = reasonCodeFrom((await safeText(response)) ?? "", CORE_REASON_KEYS);
+    const detail = reasonCode ? `HTTP ${response.status} ${reasonCode}` : `HTTP ${response.status}`;
     return new GovernanceAPIError(
-      `OpenBox Core rejected the v3 ${op} request (HTTP ${response.status}${reasonCode ? ` ${reasonCode}` : ""}). ` +
+      `OpenBox Core rejected the v3 ${op} request (${detail}). ` +
         "This is a contract error, not an outage, so it never becomes a fallback ALLOW; check that the " +
         "SDK and Core versions are compatible."
     );
