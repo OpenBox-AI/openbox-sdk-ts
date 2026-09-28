@@ -121,10 +121,9 @@ export class AuthStateCoordinator<T extends object> {
   #startFlight(): Flight<T> {
     const revision = this.#revision;
     const controller = new AbortController();
-    // A synchronous throw from `acquire` rejects this flight like an async failure.
-    const acquisition = new Promise<T>((resolve) => {
-      resolve(this.#options.acquire(controller.signal));
-    });
+    // Async by contract. A synchronous throw would fail only the get() that
+    // started this acquisition: the flight below is never registered.
+    const acquisition = this.#options.acquire(controller.signal);
     const flight: Flight<T> = {
       revision,
       controller,
