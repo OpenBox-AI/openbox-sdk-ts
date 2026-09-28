@@ -96,6 +96,9 @@ conflicts — see the spec §1, §6.1, §7.3, §10):
    uses it whenever no neutral key is set.
 5. `identity_source` must match exactly (Python lowercases it); UUIDs are accepted
    case-insensitively and normalized to lowercase (as Python does).
+6. A blank env var (empty or whitespace-only) counts as unset and falls through to the
+   next layer (user decision, 2026-09-28); Python treats any set value, even an empty
+   one, as set.
 
 ## Python base SDK → TS module map
 

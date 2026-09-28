@@ -151,6 +151,18 @@ describe("workload environment precedence (explicit > prefixed > global)", () =>
     expect(config.resolvedWorkloadPrivateKey()).toBe(OTHER_WORKLOAD_PEM);
   });
 
+  it("lets an empty prefixed variable fall through to the global key instead of shadowing it", () => {
+    for (const blank of ["", "  "]) {
+      const config = OpenBoxConfig.resolve({
+        ...BASE,
+        envPrefix: "OPENBOX_FRAMEWORK",
+        environ: { OPENBOX_FRAMEWORK_WORKLOAD_PRIVATE_KEY: blank, OPENBOX_WORKLOAD_PRIVATE_KEY: WORKLOAD_PEM }
+      });
+      expect(config.resolvedIdentityMethod()).toBe("keycloak_workload");
+      expect(config.resolvedWorkloadPrivateKey()).toBe(WORKLOAD_PEM);
+    }
+  });
+
   it("prefers an explicit value over both variables", () => {
     const explicit = fakePrivateKeyPem("explicit");
     const config = OpenBoxConfig.resolve({

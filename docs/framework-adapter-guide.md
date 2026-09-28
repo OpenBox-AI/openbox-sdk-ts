@@ -88,7 +88,7 @@ not a theoretical one.
    import { OpenBoxConfig } from "@openbox-ai/openbox-sdk-ts/config";
 
    // Resolves MYFRAMEWORK_API_URL / MYFRAMEWORK_API_KEY (falling back to
-   // OPENBOX_API_URL / OPENBOX_API_KEY) from the environment.
+   // OPENBOX_API_URL / OPENBOX_API_KEY when unset or blank) from the environment.
    const config = OpenBoxConfig.resolve({ envPrefix: "MYFRAMEWORK" });
    ```
 

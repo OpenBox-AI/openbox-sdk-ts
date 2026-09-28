@@ -199,10 +199,10 @@ and sends every request to `/api/v3/*` with `Authorization: Bearer <API key>` pl
   `await client.refreshWorkloadIdentity()` invalidates immediately and re-acquires.
   A different private key needs a new client after the managed transition.
 - **Select the method explicitly.** Without `identityMethod: "keycloak_workload"`,
-  a missing key means legacy API-key-only mode — and an env var that is *set but
-  empty* counts as set, so an empty `OPENBOX_<PREFIX>_WORKLOAD_PRIVATE_KEY=` shadows
-  a valid `OPENBOX_WORKLOAD_PRIVATE_KEY`. With the explicit method both cases fail
-  locally instead.
+  a missing key means legacy API-key-only mode; with it, a missing key fails locally.
+  A blank env var (empty or whitespace-only) counts as unset, so an empty
+  `OPENBOX_<PREFIX>_WORKLOAD_PRIVATE_KEY=` falls through to
+  `OPENBOX_WORKLOAD_PRIVATE_KEY` instead of shadowing it.
 - **Okta-sourced agents** moved to workload authentication may keep their key in
   `OPENBOX_OKTA_AGENT_PRIVATE_KEY` as a migration alias, but only with an explicit
   `identityMethod: "keycloak_workload"` (and only once the same public key is

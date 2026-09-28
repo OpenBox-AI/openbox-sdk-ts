@@ -156,6 +156,12 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
 
 ## Open decisions (product/security — not plan defects)
 
+- **Blank environment variables — RESOLVED (user decision, 2026-09-28):** an empty
+  or whitespace-only env var counts as unset and falls through to the next layer
+  (prefixed → global → default), so it can no longer shadow a valid global identity
+  key and silently downgrade the agent. Python's layering (`is None`) still treats it
+  as set. Explicit values are unchanged.
+
 - **`on_api_error` default — RESOLVED (user decision):** default stays `fail_open`,
   plus an opt-in third policy `fail_closed_destructive` (config value) that blocks
   only DESTRUCTIVE ops on an outage — db writes, file writes, non-idempotent HTTP

@@ -8,6 +8,10 @@
  *   4. defaults
  *   5. validation + normalization
  *
+ * A blank env var (empty or whitespace-only) counts as unset, so an empty
+ * `OPENBOX_FRAMEWORK_WORKLOAD_PRIVATE_KEY=` falls through to the global
+ * variable instead of shadowing it.
+ *
  * Env access happens only inside `resolve()`, never at import time.
  */
 
@@ -154,6 +158,12 @@ const ENV_FIELDS: Record<string, string> = {
   workloadPrivateKey: "WORKLOAD_PRIVATE_KEY"
 };
 
+/** An env var's value, or undefined when it is unset or blank (empty or whitespace-only). */
+function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
+  const value = env[name];
+  return value === undefined || value.trim() === "" ? undefined : value;
+}
+
 /** Settable fields for `resolve()` (excludes the nested-config defaults). */
 export interface OpenBoxConfigInput {
   apiUrl?: string;
@@ -244,15 +254,15 @@ export class OpenBoxConfig {
     const config = new OpenBoxConfig();
     config.envPrefix = envPrefix ?? null;
 
-    // Env-resolvable fields: explicit > prefixed env > global env.
+    // Env-resolvable fields: explicit > prefixed env > global env (blank env = unset).
     const explicitValues = new Map<string, unknown>(Object.entries(explicit));
     for (const [field, suffix] of Object.entries(ENV_FIELDS)) {
       let value: unknown = explicitValues.get(field);
       if ((value === undefined || value === null) && envPrefix) {
-        value = env[`${envPrefix}_${suffix}`];
+        value = envValue(env, `${envPrefix}_${suffix}`);
       }
       if (value === undefined || value === null) {
-        value = env[`${GLOBAL_ENV_PREFIX}_${suffix}`];
+        value = envValue(env, `${GLOBAL_ENV_PREFIX}_${suffix}`);
       }
       if (value !== undefined && value !== null) {
         (config as unknown as Record<string, unknown>)[field] = value;
@@ -285,8 +295,9 @@ export class OpenBoxConfig {
 
     // Typed as number, but env resolution can assign a raw string here.
     const rawTimeout: unknown = this.timeoutSeconds;
-    // Number("") and Number("  ") are 0 — an empty env var must NOT silently
-    // become a 0ms timeout that aborts every request. Treat blank as invalid.
+    // Number("") and Number("  ") are 0 — a blank explicit value must NOT
+    // silently become a 0ms timeout that aborts every request. Treat blank as
+    // invalid. (A blank env var never reaches here: it counts as unset.)
     const timeout =
       typeof rawTimeout === "string" && rawTimeout.trim() === "" ? NaN : Number(rawTimeout);
     if (Number.isNaN(timeout)) {

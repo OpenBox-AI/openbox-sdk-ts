@@ -38,6 +38,34 @@ describe("OpenBoxConfig.resolve — layered env", () => {
     });
     expect(cfg.apiUrl).toBe("https://prefixed.example.com");
   });
+
+  it("treats a blank env var as unset, so it never shadows the next layer", () => {
+    const cfg = OpenBoxConfig.resolve({
+      envPrefix: "OPENBOX_FW",
+      environ: {
+        OPENBOX_FW_API_URL: "",
+        OPENBOX_API_URL: "https://global.example.com",
+        OPENBOX_FW_API_KEY: "   ",
+        OPENBOX_API_KEY: "obx_test_global",
+        OPENBOX_FW_AGENT_NAME: "",
+        OPENBOX_AGENT_NAME: "global-agent",
+        OPENBOX_FW_ON_API_ERROR: "",
+        OPENBOX_ON_API_ERROR: "",
+        OPENBOX_AGENT_IDENTITY_METHOD: " "
+      }
+    });
+    expect(cfg.apiUrl).toBe("https://global.example.com");
+    expect(cfg.apiKey).toBe("obx_test_global");
+    expect(cfg.agentName).toBe("global-agent");
+    expect(cfg.onApiError).toBe("fail_open"); // blank at both layers → default
+    expect(cfg.identityMethod).toBeNull();
+  });
+
+  it("still requires a value when every layer is blank", () => {
+    expect(() =>
+      OpenBoxConfig.resolve({ environ: { OPENBOX_API_URL: "https://x.com", OPENBOX_API_KEY: "" } })
+    ).toThrow("apiKey is required");
+  });
 });
 
 describe("OpenBoxConfig.normalized — validation", () => {
@@ -131,13 +159,20 @@ describe("secret redaction", () => {
 });
 
 describe("timeout resolution", () => {
-  it("rejects a blank timeout env var (never silently becomes a 0ms timeout)", () => {
-    expect(() =>
-      OpenBoxConfig.resolve({
-        environ: { OPENBOX_TIMEOUT_SECONDS: "" },
-        apiUrl: "https://x.com",
-        apiKey: "obx_test_k"
-      })
-    ).toThrow(OpenBoxConfigError);
+  it("uses the default for a blank timeout env var (never a 0ms timeout)", () => {
+    const cfg = OpenBoxConfig.resolve({
+      environ: { OPENBOX_TIMEOUT_SECONDS: "" },
+      apiUrl: "https://x.com",
+      apiKey: "obx_test_k"
+    });
+    expect(cfg.timeoutSeconds).toBe(30);
+  });
+
+  it("rejects a blank explicit timeout (never silently becomes a 0ms timeout)", () => {
+    for (const timeoutSeconds of ["", "  "]) {
+      expect(() => resolve({ apiUrl: "https://x.com", apiKey: "obx_test_k", timeoutSeconds })).toThrow(
+        OpenBoxConfigError
+      );
+    }
   });
 });

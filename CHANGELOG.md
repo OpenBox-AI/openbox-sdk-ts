@@ -53,6 +53,12 @@ parser, v2 refresh semantics, and runtime shutdown change externally visible beh
   longer overwrite a newer refresh.
 - **BREAKING — `OpenBoxRuntime.close()` closes its client, including an injected one.**
   Consumers sharing a client must coordinate shutdown.
+- **BREAKING — a blank environment variable counts as unset.** An empty or
+  whitespace-only `OPENBOX_<PREFIX>_*` / `OPENBOX_*` value now falls through to the
+  next layer instead of shadowing it — e.g. an empty
+  `OPENBOX_<PREFIX>_WORKLOAD_PRIVATE_KEY=` no longer hides `OPENBOX_WORKLOAD_PRIVATE_KEY`
+  and silently leaves the agent in API-key-only mode. A blank `OPENBOX_TIMEOUT_SECONDS`
+  now means the 30 s default instead of a config error. Explicit values are unchanged.
 - `OpenBoxRuntime` builds its default client with `OpenBoxClient.fromConfig`.
 - `OpenBoxClient` serializes/inspects as a redacted summary (never the API key,
   private keys, or tokens).
