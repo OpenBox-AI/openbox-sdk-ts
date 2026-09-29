@@ -7,8 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-Recommended as the next **major** release (proposed `2.0.0`): the v2 bootstrap
-parser, v2 refresh semantics, and runtime shutdown change externally visible behavior.
+## [2.0.0] - 2026-09-29
+
+Major release: the v2 bootstrap parser, v2 refresh semantics, runtime shutdown,
+and blank env-var handling change externally visible behavior.
 
 ### Added
 
