@@ -61,6 +61,46 @@ Always sent: `Authorization: Bearer`, `User-Agent: OpenBox-SDK/{version}`,
 `internal/content/governance.go:266-318` — drive the Phase 3 field matrix from
 the Go struct, **not** the SDK integration guide (the guide under-reports).
 
+## IAM v3 workload contract summary
+
+Reference: `openbox-core` `origin/develop` `bbe79ca` (handlers
+`internal/api/keycloak_workload_bootstrap.go`, `keycloak_workload_transition.go`;
+wire types `internal/content/keycloak_workload_identity.go`; verifiers
+`internal/services/identity/keycloak_workload_token.go`, `keycloak_workload_transition.go`).
+Design: `openbox-iam-v3-typescript-sdk-spec.md` (workspace root). Re-inspect the
+target Core revision before relying on this table.
+
+| Step | Request | Notes |
+|---|---|---|
+| Bootstrap | `GET /api/v3/auth/bootstrap`, API key + SDK headers only | Direct JSON object: `bootstrap_version`/`contract_version` = 3, `token_endpoint`, `issuer`, `audience`, `client_id`, `service_account_id`, `activation_version` (canonical non-nil UUIDs), `identity_source` (`openbox`/`okta`/`entra`), `kid`. `404` = no v3 on this Core; `409 workload_identity_unavailable` = no active authority. |
+| Token | `POST <token_endpoint>` form: `grant_type`, `client_id`, `client_assertion_type`, `client_assertion` | RS256 assertion: header `{alg,kid,typ:"JWT"}`, claims `{aud: token_endpoint, exp: iat+60, iat, iss=sub=client_id, jti}`. No API key, proof, scope, audience, or secret. |
+| Runtime | `/api/v3/{auth/validate, governance/evaluate, governance/approval, handoffs}` | `Authorization: Bearer <API key>` + raw `X-OpenBox-Workload-Token`. Core verifies locally (RS256, issuer, audience, ≤ 6 min lifetime, 60 s skew, active realm key, `sub`/`azp`/`openbox_*` claims vs the active service account) and collapses failures into a generic 401. `Handoff` on v3 evaluate is a 400. |
+| Candidate | `GET /api/v3/auth/workload-transition/bootstrap?transition_id=`, then `POST /api/v3/auth/workload-transition/proof` `{transition_id, client_assertion}` | API key only; Core verifies the candidate's registered key, claims the `jti` once, and records proof. No Keycloak call; activation is a separate Backend action. |
+
+Rules enforced in `src/client/workload-*.ts`: token endpoint must equal the issuer
+(one trailing slash trimmed) + `/protocol/openid-connect/token`; issuer/token URLs
+are HTTPS (HTTP only for exact `localhost`/`127.0.0.1`/`::1`) with no userinfo,
+query, or fragment; no v3 request follows a redirect (a runtime redirect is a contract
+error — ledger 12); bootstrap/token/transition requests run in
+`runAsInternal` (Keycloak is not Core's origin); tokens cache ≤ 300 s with a 30 s
+margin, `expires_in` must be a number > 30.
+
+**Intentional differences from `openbox-sdk-python`** (design decisions, not
+conflicts — see the spec §1, §6.1, §7.3, §10):
+
+1. Workload mode is fixed to v3 before the first request; Python resumes legacy
+   authentication on bootstrap `404`/`409 workload_identity_unavailable`. TS never does.
+2. Every renewal re-fetches bootstrap; Python reuses the cached document.
+3. `proveWorkloadIdentityTransition` requires an explicit candidate key; Python
+   defaults to the active workload key.
+4. The Okta key is a workload alias only under explicit `keycloak_workload`; Python
+   uses it whenever no neutral key is set.
+5. `identity_source` must match exactly (Python lowercases it); UUIDs are accepted
+   case-insensitively and normalized to lowercase (as Python does).
+6. A blank env var (empty or whitespace-only) counts as unset and falls through to the
+   next layer (user decision, 2026-09-28); Python treats any set value, even an empty
+   one, as set.
+
 ## Python base SDK → TS module map
 
 Reference repo: `openbox-sdk-python` (sibling checkout; package `openbox_core/`).

@@ -7,7 +7,7 @@
  *     await runtime.evaluateLifecycle(workflowStarted({...}));
  *     await runtime.preflight({ spans: [span] });
  *     ...
- *     runtime.close();
+ *     runtime.close(); // also closes runtime.client
  *
  * Lifecycle helpers evaluate through the strict gate (`../gate/index.js`) and
  * delegate every native effect (block/halt/approval) to the adapter — the
@@ -52,17 +52,9 @@ export class OpenBoxRuntime {
     // Per-runtime, never a process-global singleton — see context/index.ts.
     this.contextStore = options.contextStore ?? new ContextStore();
     const logger = options.logger ?? console;
-    this.client =
-      options.client ??
-      new OpenBoxClient(config.apiUrl, config.apiKey, {
-        timeoutSeconds: config.timeoutSeconds,
-        onApiError: config.onApiError,
-        identity: config.loadIdentity(),
-        sdkVersion: config.sdkVersion,
-        sdkEngine: config.sdkEngine,
-        sdkLanguage: config.sdkLanguage,
-        logger
-      });
+    // The shared config -> client mapping (DID, Okta v2, Keycloak workload v3,
+    // or unsigned) — the same path framework adapters use.
+    this.client = options.client ?? OpenBoxClient.fromConfig(config, { logger });
     const payloadBuilder = options.payloadBuilder ?? makePayloadBuilder(config.privacy);
     this.hooks = new HookEvaluator({
       client: this.client,
@@ -132,10 +124,17 @@ export class OpenBoxRuntime {
 
   // ── Shutdown ────────────────────────────────────────────────────────────────
 
-  /** Clear correlation state (idempotent — safe to call more than once). */
+  /**
+   * Close this runtime's client (dropping cached tokens and key references) and
+   * clear correlation state. Idempotent — safe to call more than once.
+   *
+   * The client is closed even when it was injected via `options.client`:
+   * consumers that share one client must coordinate shutdown.
+   */
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.client.close();
     this.contextStore.clear();
   }
 }

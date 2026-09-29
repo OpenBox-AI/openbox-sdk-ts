@@ -12,6 +12,10 @@
 const EVALUATE_SUFFIX = "/governance/evaluate";
 const APPROVAL_SUFFIX = "/governance/approval";
 const AUTH_VALIDATE_SUFFIX = "/auth/validate";
+const AUTH_BOOTSTRAP_SUFFIX = "/auth/bootstrap";
+// Keycloak realm token endpoint (IAM v3 workload token exchange). The SDK sends
+// it through the same fetchImpl as Core traffic, so the fake answers it too.
+const WORKLOAD_TOKEN_SUFFIX = "/protocol/openid-connect/token";
 
 export interface CapturedRequest {
   readonly method: string;
@@ -83,10 +87,15 @@ export class FakeCore {
   readonly evaluateRequests: CapturedRequest[] = [];
   readonly approvalRequests: CapturedRequest[] = [];
   readonly authRequests: CapturedRequest[] = [];
+  readonly bootstrapRequests: CapturedRequest[] = [];
+  /** Keycloak token-endpoint requests (form-encoded bodies; `bodyJson` is undefined). */
+  readonly tokenRequests: CapturedRequest[] = [];
 
   private readonly evaluateQueue: ScriptedResponse[] = [];
   private readonly approvalQueue: ScriptedResponse[] = [];
   private readonly authQueue: ScriptedResponse[] = [];
+  private readonly bootstrapQueue: ScriptedResponse[] = [];
+  private readonly tokenQueue: ScriptedResponse[] = [];
   private approvalNetworkErrorMessage: string | null = null;
 
   /** Queue evaluate responses, popped FIFO; an empty queue answers `{verdict:"allow"}`. */
@@ -103,6 +112,29 @@ export class FakeCore {
 
   queueAuth(...responses: readonly ScriptedResponse[]): this {
     this.authQueue.push(...responses);
+    return this;
+  }
+
+  /**
+   * Queue `GET /api/v{2,3}/auth/bootstrap` responses, popped FIFO.
+   *
+   * An empty queue answers 404, matching a Core deployment that predates the
+   * bootstrap endpoint — the conservative default, since it makes a scenario that
+   * forgot to script bootstrap fail loudly instead of silently succeeding with
+   * metadata no real Core returned.
+   */
+  queueBootstrap(...responses: readonly ScriptedResponse[]): this {
+    this.bootstrapQueue.push(...responses);
+    return this;
+  }
+
+  /**
+   * Queue Keycloak token-endpoint responses (IAM v3), popped FIFO. An empty
+   * queue answers `400 invalid_client`, so a scenario that forgot to script the
+   * exchange fails loudly instead of receiving a token no Keycloak issued.
+   */
+  queueWorkloadToken(...responses: readonly ScriptedResponse[]): this {
+    this.tokenQueue.push(...responses);
     return this;
   }
 
@@ -157,6 +189,12 @@ export class FakeCore {
       bodyJson: safeJsonParse(bodyText)
     };
 
+    if (url.pathname.endsWith(WORKLOAD_TOKEN_SUFFIX)) {
+      this.tokenRequests.push(captured);
+      return Promise.resolve(
+        this.respond(this.tokenQueue, { status: 400, body: { error: "invalid_client" } })
+      );
+    }
     if (url.pathname.endsWith(EVALUATE_SUFFIX)) {
       this.evaluateRequests.push(captured);
       return Promise.resolve(
@@ -170,6 +208,17 @@ export class FakeCore {
       }
       return Promise.resolve(
         this.respond(this.approvalQueue, { status: 200, body: { action: "allow" } })
+      );
+    }
+    // Checked BEFORE /auth/validate: both live under /auth/, and an
+    // endsWith test on the wrong one first would misroute.
+    if (url.pathname.endsWith(AUTH_BOOTSTRAP_SUFFIX)) {
+      this.bootstrapRequests.push(captured);
+      return Promise.resolve(
+        this.respond(this.bootstrapQueue, {
+          status: 404,
+          body: { code: 404, message: "not found" }
+        })
       );
     }
     if (url.pathname.endsWith(AUTH_VALIDATE_SUFFIX)) {

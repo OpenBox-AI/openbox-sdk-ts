@@ -106,7 +106,75 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
 
 ---
 
+## 7. IAM v3 bootstrap 404/409 — no legacy negotiation
+
+- **Python (`f5b8562`):** a v3 bootstrap `404`, or `409 workload_identity_unavailable`,
+  resumes legacy (v1/v2 or API-key-only) authentication.
+- **Core (`bbe79ca`):** a missing workload schema can also resolve as "no active
+  workload identity" → the same `409` (`keycloak_workload_identity_pgx.go`), so a 409
+  is not a reliable migration-state declaration.
+- **Resolution (spec §6.1, user-accepted):** a `keycloak_workload` client is fixed to
+  v3 before its first request; every bootstrap/token failure throws
+  `OpenBoxWorkloadAuthError`. Operators choose legacy or workload mode explicitly.
+  **[verified-good — do not reverse.]**
+
+## 8. IAM v3 non-auth 4xx — contract error, v3 only
+
+- **Existing decision (2026-07-09, below):** v1/v2 non-auth 4xx follow `onApiError`
+  (fail-open under the default). Python's v3 path does the same.
+- **Spec §8:** "Runtime v3 non-retryable 4xx, including malformed payload or missing
+  route → API/contract error; never turn a bad contract into ALLOW."
+- **Resolution:** v3 only — every 4xx except 401/403 and the retryable 408/429 throws
+  `GovernanceAPIError` on evaluate, approval, and validate (handoff already threw).
+  Network failures and 5xx/408/429 keep `onApiError`. v1/v2 unchanged.
+
+## 9. Okta v2 bootstrap `authority` — required at unchanged version 1
+
+- **Core:** added `authority` to the v2 document without bumping
+  `IdentityBootstrapVersion` (still `1`). **Python:** requires it. **Old TS parser:**
+  ignored it.
+- **Resolution (spec §9):** required, with UUID-shaped ids (projection version and
+  organization id stay opaque) and a positive safe-integer generation. Core
+  deployments without it are incompatible — a documented breaking change.
+
+## 10. Candidate transition document has no `issuer`
+
+- **Core:** `KeycloakWorkloadTransitionBootstrapDocument` carries `token_endpoint` but
+  no `issuer`. **Python:** derives the issuer by stripping
+  `/protocol/openid-connect/token`.
+- **Resolution:** same derivation; the token endpoint and derived issuer get the
+  active document's URL rules. `expires_at` must be RFC 3339 with an explicit offset
+  (Go's `time.Time` JSON) and in the future.
+
+## 11. `identity_source` case
+
+- **Python:** lowercases before checking. **Core:** stores and verifies exact
+  lowercase values (`openbox_identity_source` claim compared verbatim).
+- **Resolution:** exact match only (`openbox`, `okta`, `entra`).
+
+## 12. Redirects on v3 runtime calls — refused
+
+- **Spec (line 192):** reject redirects for the bootstrap and token exchange; "do not
+  let an assertion or API key follow a redirect to another target". Runtime calls are
+  not mentioned.
+- **Node fetch:** on a cross-origin redirect it drops `Authorization` but re-sends
+  custom headers, so a followed runtime redirect hands the reusable
+  `X-OpenBox-Workload-Token` (≤ 300 s) to the target — which also answers the
+  governance call (a real-fetch test showed its body parsed as the verdict).
+- **Python:** httpx never follows redirects; the 3xx then follows `on_api_error`.
+- **Resolution (user decision, 2026-09-28):** every v3 runtime request uses
+  `redirect: "manual"`; a redirect answer is a contract error (`GovernanceAPIError`,
+  never a fallback ALLOW or "still pending"), like ledger 8. v1/v2 unchanged.
+
+---
+
 ## Open decisions (product/security — not plan defects)
+
+- **Blank environment variables — RESOLVED (user decision, 2026-09-28):** an empty
+  or whitespace-only env var counts as unset and falls through to the next layer
+  (prefixed → global → default), so it can no longer shadow a valid global identity
+  key and silently downgrade the agent. Python's layering (`is None`) still treats it
+  as set. Explicit values are unchanged.
 
 - **`on_api_error` default — RESOLVED (user decision):** default stays `fail_open`,
   plus an opt-in third policy `fail_closed_destructive` (config value) that blocks
@@ -147,6 +215,19 @@ sub-µs imprecision + loss of cross-SDK ns byte-identity, both immaterial here.
   redacting everything would blind governance. Matches Python. `db_statement`
   redaction default is deferred to Tier A2. Consumers with PII in args/bodies
   should set `redactKeys` or the capture opt-outs.
+
+- **v3 approval 404 — OPEN (raised to user 2026-09-27):** Core's approval handler
+  maps every `GetApprovalStatusByWorkflow` error — not-found *and* datastore failures —
+  to `404 governance event not found`. Under entry 8 a v3 approval 404 throws, so a
+  transient Core datastore error ends the approval wait fail-safe (operation not run)
+  instead of polling again. Options: keep (spec-literal), carve approval 404 out as
+  "still pending", or fix Core to return 5xx for datastore errors.
+- **Redirects on v3 runtime requests — OPEN (raised to user 2026-09-27):** the spec
+  refuses redirects for bootstrap and token exchange (TS also refuses them for the
+  transition bootstrap/proof). v3 runtime requests still follow redirects like v1/v2.
+  Node's fetch drops `Authorization` on a cross-origin redirect but forwards the custom
+  `X-OpenBox-Workload-Token`. Recommendation: refuse redirects on v3 runtime requests
+  too (a spec change; needs approval).
 
 ## Node engine
 

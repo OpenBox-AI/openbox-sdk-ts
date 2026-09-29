@@ -11,4 +11,14 @@ paths = [
   '''(^|/)coverage/''',
   '''(^|/)package-lock\.json$''',
   '''(^|/)\.env\.example$''',
+  # v2 agent-identity golden fixtures: the non-production RSA keypair (which carries an
+  # explicit non-production warning) and the fake API keys and assertions it signs.
+  # Owned by openbox-core/testdata/identity-v2 and synced here. Allowlisted by fixture
+  # directory so no global rule has to be loosened.
+  '''(^|/)test/fixtures/identity-v2/''',
+]
+regexes = [
+  # The public golden Ed25519 test seed (bytes 0x00..0x1f) shared by the signing
+  # tests. Exact value only, so any other key-shaped string is still reported.
+  '''AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=''',
 ]
