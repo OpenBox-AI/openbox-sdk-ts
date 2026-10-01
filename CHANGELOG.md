@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-01
+
+### Fixed
+
+- Approval polling keeps Node alive while a governed operation awaits a decision,
+  preventing an early exit with an unsettled top-level await warning. Cancellation
+  still clears the polling timer and rejects the wait immediately.
+
 ## [2.0.0] - 2026-09-29
 
 Major release: the v2 bootstrap parser, v2 refresh semantics, runtime shutdown,

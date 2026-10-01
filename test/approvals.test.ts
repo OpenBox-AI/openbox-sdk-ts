@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ApprovalPoller } from "../src/approvals/index.js";
 import type { OpenBoxClient } from "../src/client/index.js";
@@ -92,34 +92,5 @@ describe("ApprovalPoller.waitForDecision — abortSignal (shutdown cancellation)
     await expect(pending).rejects.toBeInstanceOf(ApprovalRejectedError);
     await expect(pending).rejects.toThrow(/aborted \(shutdown\)/);
     expect(pollCount).toBe(1); // no further poll is issued after the abort
-  });
-
-  it("unrefs the sleep timer so a pending wait never pins the process", async () => {
-    const realSetTimeout = globalThis.setTimeout;
-    const timers: NodeJS.Timeout[] = [];
-    const spy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: () => void, delay?: number) => {
-        const timer = realSetTimeout(callback, delay);
-        timers.push(timer);
-        return timer;
-      });
-
-    try {
-      const poller = new ApprovalPoller(fakeClient(() => Promise.resolve(PENDING)), {
-        pollIntervalMs: 5,
-        maxWaitMs: 12
-      });
-      await expect(poller.waitForDecision("wf", "run", "act")).rejects.toBeInstanceOf(
-        ApprovalTimeoutError
-      );
-    } finally {
-      spy.mockRestore();
-    }
-
-    expect(timers.length).toBeGreaterThan(0);
-    for (const timer of timers) {
-      expect(timer.hasRef()).toBe(false);
-    }
   });
 });

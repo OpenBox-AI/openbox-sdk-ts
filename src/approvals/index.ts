@@ -35,8 +35,8 @@ export interface ApprovalPollerOptions {
 }
 
 /**
- * Abort-aware, unref'd delay. `unref()` so a pending sleep during a parked
- * approval wait never keeps the process alive on its own; an abort rejects
+ * Keep the timer referenced while an operation awaits approval: a pending
+ * Promise alone does not keep Node alive. An abort clears the timer and rejects
  * immediately instead of waiting out the full interval.
  */
 function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
@@ -53,7 +53,6 @@ function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
       abortSignal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
-    timer.unref?.();
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });
 }
