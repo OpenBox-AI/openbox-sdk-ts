@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `withOnBehalfOf(user, fn)` (from `@openbox-ai/openbox-sdk-ts/context`). Every
+  governance event sent inside `fn`'s async call chain carries
+  `on_behalf_of: { user, source }`, which OpenBox information barriers check
+  alongside the agent. A value already on the payload wins.
+
 ## [2.1.0] - 2026-10-01
 
 ### Fixed

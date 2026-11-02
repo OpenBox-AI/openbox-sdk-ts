@@ -71,6 +71,7 @@ import type {
 // `recursion-guard.ts` is a dependency-free leaf (only `node:async_hooks`),
 // so this import cannot create a cycle back through `runtime`/`instrumentation`.
 import { runAsInternal } from "../instrumentation/recursion-guard.js";
+import { applyOnBehalfOf } from "../context/on-behalf-of.js";
 import {
   assertPrivateKeyMatchesDocument,
   fetchBootstrapDocument,
@@ -689,6 +690,7 @@ export class OpenBoxClient {
    * a contract error that throws under every outage policy.
    */
   async evaluate(payload: JsonValue): Promise<EvaluationResult> {
+    payload = applyOnBehalfOf(payload);
     const prepared = await this.prepared("evaluate", payload);
     let response: Response;
     try {
