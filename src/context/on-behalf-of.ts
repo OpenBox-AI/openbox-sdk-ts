@@ -48,7 +48,7 @@ export function applyOnBehalfOf(payload: JsonValue): JsonValue {
   if (!current || payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     return payload;
   }
-  const record = payload as { readonly [key: string]: JsonValue };
+  const record = payload;
   if (record["on_behalf_of"]) return payload;
   return { ...record, on_behalf_of: { user: current.user, source: current.source } };
 }
