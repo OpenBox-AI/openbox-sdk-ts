@@ -33,6 +33,8 @@ import {
 } from "./trace-map.js";
 
 export { canonicalTraceKey, BoundedTraceMap };
+export { withOnBehalfOf, currentOnBehalfOf, applyOnBehalfOf } from "./on-behalf-of.js";
+export type { OnBehalfOf } from "./on-behalf-of.js";
 export type { BoundedTraceMapOptions, TraceIdLike };
 
 export interface ActivityScopeOptions {
