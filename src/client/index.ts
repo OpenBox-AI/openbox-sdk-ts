@@ -71,6 +71,7 @@ import type {
 // `recursion-guard.ts` is a dependency-free leaf (only `node:async_hooks`),
 // so this import cannot create a cycle back through `runtime`/`instrumentation`.
 import { runAsInternal } from "../instrumentation/recursion-guard.js";
+import { applyExposure } from "../context/exposure.js";
 import { applyOnBehalfOf } from "../context/on-behalf-of.js";
 import {
   assertPrivateKeyMatchesDocument,
@@ -341,6 +342,11 @@ export class OpenBoxClient {
   private readonly apiKey: string;
   private readonly timeoutMs: number;
   private readonly onApiError: OnApiError;
+  /**
+   * `fail_closed` once the server has said this agent is governed by an
+   * exposure barrier (`settings.on_api_error`); it never relaxes back.
+   */
+  private serverOnApiError: OnApiError | null = null;
   /** Fixed at construction: 1 (DID/unsigned), 2 (okta_ai_agent), 3 (keycloak_workload). */
   private readonly contractVersion: ContractVersion;
   // Not `readonly`: close() drops key references.
@@ -690,7 +696,7 @@ export class OpenBoxClient {
    * a contract error that throws under every outage policy.
    */
   async evaluate(payload: JsonValue): Promise<EvaluationResult> {
-    payload = applyOnBehalfOf(payload);
+    payload = applyExposure(applyOnBehalfOf(payload));
     const prepared = await this.prepared("evaluate", payload);
     let response: Response;
     try {
@@ -723,6 +729,7 @@ export class OpenBoxClient {
     } catch (e) {
       return this.networkFailure(`Governance API returned unparseable body: ${errorMessage(e)}`, payload);
     }
+    this.recordSettings(data);
     const result = EvaluationResult.fromDict((data ?? {}) as Dict);
     if (verdictShouldStop(result.verdict)) {
       this.logger.info(`Governance blocked: ${result.reason} (policy: ${result.policyId})`);
@@ -740,9 +747,36 @@ export class OpenBoxClient {
     this.logger.warn(reason);
     const failClosed =
       this.onApiError === "fail_closed" ||
+      this.serverOnApiError === "fail_closed" ||
       (this.onApiError === "fail_closed_destructive" && payloadHasDestructiveSpan(payload));
     if (failClosed) throw new GovernanceAPIError(reason);
     return EvaluationResult.fallbackAllow(reason);
+  }
+
+  /** `on_api_error` as last pushed by the server, if it pushed one. */
+  get serverPushedOnApiError(): OnApiError | null {
+    return this.serverOnApiError;
+  }
+
+  /**
+   * The server pushes `settings.on_api_error = "fail_closed"` for agents an
+   * exposure barrier governs (PROD-1098), so an outage never fails open for
+   * them, whatever the local setting. Only ever tightens.
+   */
+  private recordSettings(data: unknown): void {
+    const settings =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>).settings
+        : undefined;
+    if (
+      settings &&
+      typeof settings === "object" &&
+      (settings as Record<string, unknown>).on_api_error === "fail_closed" &&
+      this.serverOnApiError !== "fail_closed"
+    ) {
+      this.serverOnApiError = "fail_closed";
+      this.logger.info("OpenBox requires fail_closed for this agent (exposure barriers)");
+    }
   }
 
   /**
