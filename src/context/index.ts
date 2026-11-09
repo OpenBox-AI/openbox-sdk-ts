@@ -33,6 +33,29 @@ import {
 } from "./trace-map.js";
 
 export { canonicalTraceKey, BoundedTraceMap };
+export { withOnBehalfOf, currentOnBehalfOf, applyOnBehalfOf } from "./on-behalf-of.js";
+export type { OnBehalfOf } from "./on-behalf-of.js";
+export {
+  ACTION_CLASSES,
+  DEFAULT_ACTION_CLASS,
+  LABEL_SOURCES,
+  PARTICIPANT_KINDS,
+  applyExposure,
+  currentExposureFields,
+  hashPayload,
+  participantToWire,
+  resourceToWire,
+  withExposureScope,
+  withGovernedAction
+} from "./exposure.js";
+export type {
+  ActionClass,
+  GovernedActionInput,
+  LabelSource,
+  ParticipantInput,
+  ParticipantKind,
+  ResourceInput
+} from "./exposure.js";
 export type { BoundedTraceMapOptions, TraceIdLike };
 
 export interface ActivityScopeOptions {
